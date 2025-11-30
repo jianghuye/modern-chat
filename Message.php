@@ -1,0 +1,207 @@
+<?php
+require_once 'db.php';
+
+class Message {
+    private $conn;
+    
+    public function __construct($db) {
+        $this->conn = $db;
+    }
+    
+    // 发送文本消息
+    public function sendTextMessage($sender_id, $receiver_id, $content) {
+        try {
+            // 过滤消息内容，移除所有HTML标签
+            $filtered_content = strip_tags($content);
+            
+            $stmt = $this->conn->prepare(
+                "INSERT INTO messages (sender_id, receiver_id, content, type, status) 
+                 VALUES (?, ?, ?, 'text', 'sent')"
+            );
+            $stmt->execute([$sender_id, $receiver_id, $filtered_content]);
+            
+            $message_id = $this->conn->lastInsertId();
+            $this->updateSession($sender_id, $receiver_id, $message_id);
+            
+            return ['success' => true, 'message_id' => $message_id];
+        } catch(PDOException $e) {
+            error_log("Send Text Message Error: " . $e->getMessage());
+            return ['success' => false, 'message' => '消息发送失败'];
+        }
+    }
+    
+    // 发送文件消息
+    public function sendFileMessage($sender_id, $receiver_id, $file_path, $file_name, $file_size) {
+        try {
+            $stmt = $this->conn->prepare(
+                "INSERT INTO messages (sender_id, receiver_id, file_path, file_name, file_size, type, status) 
+                 VALUES (?, ?, ?, ?, ?, 'file', 'sent')"
+            );
+            $stmt->execute([$sender_id, $receiver_id, $file_path, $file_name, $file_size]);
+            
+            $message_id = $this->conn->lastInsertId();
+            $this->updateSession($sender_id, $receiver_id, $message_id);
+            
+            return ['success' => true, 'message_id' => $message_id];
+        } catch(PDOException $e) {
+            error_log("Send File Message Error: " . $e->getMessage());
+            return ['success' => false, 'message' => '文件发送失败'];
+        }
+    }
+    
+    // 获取聊天记录
+    public function getChatHistory($user1_id, $user2_id, $limit = 50, $offset = 0) {
+        try {
+            $stmt = $this->conn->prepare(
+                "SELECT * FROM messages 
+                 WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) 
+                 ORDER BY created_at DESC 
+                 LIMIT ? OFFSET ?"
+            );
+            $stmt->execute([$user1_id, $user2_id, $user2_id, $user1_id, $limit, $offset]);
+            
+            $messages = $stmt->fetchAll();
+            return array_reverse($messages); // 按时间正序返回
+        } catch(PDOException $e) {
+            error_log("Get Chat History Error: " . $e->getMessage());
+            return [];
+        }
+    }
+    
+    // 更新消息状态为已读
+    public function markAsRead($message_ids) {
+        try {
+            if (empty($message_ids)) {
+                return true;
+            }
+            
+            $placeholders = implode(',', array_fill(0, count($message_ids), '?'));
+            $stmt = $this->conn->prepare(
+                "UPDATE messages SET status = 'read' WHERE id IN ($placeholders)"
+            );
+            $stmt->execute($message_ids);
+            
+            return true;
+        } catch(PDOException $e) {
+            error_log("Mark As Read Error: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    // 获取未读消息数量
+    public function getUnreadCount($user_id) {
+        try {
+            $stmt = $this->conn->prepare(
+                "SELECT COUNT(*) as unread_count FROM messages 
+                 WHERE receiver_id = ? AND status != 'read'"
+            );
+            $stmt->execute([$user_id]);
+            $result = $stmt->fetch();
+            return $result['unread_count'];
+        } catch(PDOException $e) {
+            error_log("Get Unread Count Error: " . $e->getMessage());
+            return 0;
+        }
+    }
+    
+    // 更新会话信息
+    private function updateSession($user_id, $friend_id, $message_id) {
+        try {
+            // 检查会话是否存在
+            $stmt = $this->conn->prepare(
+                "SELECT id FROM sessions WHERE user_id = ? AND friend_id = ?"
+            );
+            $stmt->execute([$user_id, $friend_id]);
+            $session = $stmt->fetch();
+            
+            if ($session) {
+                // 更新现有会话
+                $stmt = $this->conn->prepare(
+                    "UPDATE sessions SET last_message_id = ?, unread_count = unread_count + 1, updated_at = NOW() 
+                     WHERE id = ?"
+                );
+                $stmt->execute([$message_id, $session['id']]);
+            } else {
+                // 创建新会话
+                $stmt = $this->conn->prepare(
+                    "INSERT INTO sessions (user_id, friend_id, last_message_id, unread_count) 
+                     VALUES (?, ?, ?, 1)"
+                );
+                $stmt->execute([$user_id, $friend_id, $message_id]);
+            }
+            
+            return true;
+        } catch(PDOException $e) {
+            error_log("Update Session Error: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    // 获取用户的会话列表
+    public function getSessions($user_id) {
+        try {
+            $stmt = $this->conn->prepare(
+                "SELECT 
+                    s.id as session_id,
+                    u.id as friend_id,
+                    u.username,
+                    u.avatar,
+                    u.status,
+                    m.content,
+                    m.file_name,
+                    m.type,
+                    m.created_at as message_time,
+                    s.unread_count,
+                    s.updated_at
+                 FROM sessions s
+                 JOIN users u ON s.friend_id = u.id
+                 LEFT JOIN messages m ON s.last_message_id = m.id
+                 WHERE s.user_id = ?
+                 ORDER BY s.updated_at DESC"
+            );
+            $stmt->execute([$user_id]);
+            return $stmt->fetchAll();
+        } catch(PDOException $e) {
+            error_log("Get Sessions Error: " . $e->getMessage());
+            return [];
+        }
+    }
+    
+    // 清除会话未读计数
+    public function clearUnreadCount($session_id) {
+        try {
+            $stmt = $this->conn->prepare(
+                "UPDATE sessions SET unread_count = 0 WHERE id = ?"
+            );
+            $stmt->execute([$session_id]);
+            return true;
+        } catch(PDOException $e) {
+            error_log("Clear Unread Count Error: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 获取所有好友消息（管理员功能）
+     * @return array 所有好友消息列表
+     */
+    public function getAllFriendMessages() {
+        try {
+            $stmt = $this->conn->prepare(
+                "SELECT m.*, 
+                        u1.username as sender_username, 
+                        u2.username as receiver_username
+                 FROM messages m
+                 JOIN users u1 ON m.sender_id = u1.id
+                 JOIN users u2 ON m.receiver_id = u2.id
+                 ORDER BY m.created_at DESC
+                 LIMIT 1000" // 限制1000条消息
+            );
+            $stmt->execute();
+            return $stmt->fetchAll();
+        } catch(PDOException $e) {
+            error_log("Get All Friend Messages Error: " . $e->getMessage());
+            return [];
+        }
+    }
+}

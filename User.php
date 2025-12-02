@@ -44,6 +44,16 @@ class User {
                 return ['success' => false, 'message' => '邮箱或密码错误'];
             }
             
+            // 检查用户是否被注销
+            // 检查is_deleted字段
+            if (isset($user['is_deleted']) && $user['is_deleted']) {
+                return ['success' => false, 'message' => '账户已被管理员删除，无法登录'];
+            }
+            // 检查avatar字段是否为deleted_user
+            if ($user['avatar'] === 'deleted_user') {
+                return ['success' => false, 'message' => '账户已被管理员删除，无法登录'];
+            }
+            
             // 验证密码
             if (!password_verify($password, $user['password'])) {
                 return ['success' => false, 'message' => '邮箱或密码错误'];

@@ -2389,8 +2389,15 @@ $user->updateStatus($user_id, 'online');
         
         // 更新群聊列表
         function updateGroupList() {
+            // 获取当前用户ID（从会话中获取）
+            const currentUserId = <?php echo $user_id; ?>;
+            
+            // 获取当前聊天类型和选中的ID
+            const currentChatType = document.querySelector('input[name="chat_type"]')?.value;
+            const currentSelectedId = document.querySelector('input[name="id"]')?.value;
+            
             // 重新获取群聊列表
-            fetch(`get_user_groups.php?user_id=<?php echo $user_id; ?>`)
+            fetch(`get_user_groups.php`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -2403,8 +2410,29 @@ $user->updateStatus($user_id, 'online');
                             // 添加新的群聊列表
                             data.groups.forEach(group => {
                                 const groupItem = document.createElement('div');
-                                groupItem.className = `friend-item ${chat_type === 'group' && selectedId == group.id ? 'active' : ''}`;
+                                groupItem.className = `friend-item ${currentChatType === 'group' && currentSelectedId == group.id ? 'active' : ''}`;
                                 groupItem.dataset.groupId = group.id;
+                                
+                                // 添加点击事件
+                                groupItem.addEventListener('click', () => {
+                                    window.location.href = `chat.php?chat_type=group&id=${group.id}`;
+                                });
+                                
+                                // 创建群聊菜单HTML
+                                let groupMenuHTML = `
+                                    <button class="group-menu-item" onclick="event.stopPropagation(); showGroupMembers(${group.id});">查看成员</button>
+                                    <button class="group-menu-item" onclick="event.stopPropagation(); inviteFriendsToGroup(${group.id});">邀请好友</button>`;
+                                
+                                // 判断是否是群主
+                                if (group.owner_id == currentUserId) {
+                                    groupMenuHTML += `
+                                        <button class="group-menu-item" onclick="event.stopPropagation(); transferGroupOwnership(${group.id});">转让群主</button>
+                                        <button class="group-menu-item" onclick="event.stopPropagation(); deleteGroup(${group.id});">解散群聊</button>`;
+                                } else {
+                                    groupMenuHTML += `
+                                        <button class="group-menu-item" onclick="event.stopPropagation(); leaveGroup(${group.id});">退出群聊</button>`;
+                                }
+                                
                                 groupItem.innerHTML = `
                                     <div class="friend-avatar" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
                                         👥
@@ -2414,19 +2442,12 @@ $user->updateStatus($user_id, 'online');
                                         <p>${group.member_count} 成员</p>
                                     </div>
                                     <div style="position: relative;">
-                                        <button class="btn-icon" style="width: 30px; height: 30px; font-size: 12px;" onclick="toggleGroupMenu(event, ${group.id});">
+                                        <button class="btn-icon" style="width: 30px; height: 30px; font-size: 12px;" onclick="event.stopPropagation(); toggleGroupMenu(event, ${group.id});">
                                             ⋮
                                         </button>
                                         <!-- 群聊菜单 -->
                                         <div class="group-menu" id="group-menu-${group.id}" style="display: none; position: absolute; top: 0; right: 0; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1); z-index: 1000; min-width: 150px;">
-                                            <button class="group-menu-item" onclick="showGroupMembers(${group.id});">查看成员</button>
-                                            <button class="group-menu-item" onclick="inviteFriendsToGroup(${group.id});">邀请好友</button>
-                                            <?php if ($group['owner_id'] == $user_id): ?>
-                                                <button class="group-menu-item" onclick="transferGroupOwnership(${group.id});">转让群主</button>
-                                                <button class="group-menu-item" onclick="deleteGroup(${group.id});">解散群聊</button>
-                                            <?php else: ?>
-                                                <button class="group-menu-item" onclick="leaveGroup(${group.id});">退出群聊</button>
-                                            <?php endif; ?>
+                                            ${groupMenuHTML}
                                         </div>
                                     </div>
                                 `;

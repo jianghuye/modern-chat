@@ -4,6 +4,7 @@ require_once 'db.php';
 require_once 'User.php';
 require_once 'Friend.php';
 require_once 'Message.php';
+require_once 'Group.php';
 
 // 检测设备类型
 function isMobileDevice() {
@@ -39,6 +40,7 @@ $selected_friend_id = isset($_GET['friend_id']) ? intval($_GET['friend_id']) : 0
 $user = new User($conn);
 $friend = new Friend($conn);
 $message = new Message($conn);
+$group = new Group($conn);
 
 // 获取当前用户信息
 $current_user = $user->getUserById($user_id);
@@ -46,16 +48,32 @@ $current_user = $user->getUserById($user_id);
 // 获取好友列表
 $friends = $friend->getFriends($user_id);
 
-// 获取当前选中的好友信息
+// 获取群聊列表
+$groups = $group->getUserGroups($user_id);
+
+// 获取聊天类型和选中的聊天对象
+$chat_type = isset($_GET['chat_type']) ? $_GET['chat_type'] : 'friend'; // 'friend' 或 'group'
+$selected_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 $selected_friend = null;
-if ($selected_friend_id) {
-    $selected_friend = $user->getUserById($selected_friend_id);
+$selected_group = null;
+
+// 处理选中的聊天对象
+if ($selected_id) {
+    if ($chat_type === 'friend') {
+        $selected_friend = $user->getUserById($selected_id);
+    } elseif ($chat_type === 'group') {
+        $selected_group = $group->getGroupInfo($selected_id);
+    }
 }
 
 // 获取聊天记录
 $chat_history = [];
-if ($selected_friend_id) {
-    $chat_history = $message->getChatHistory($user_id, $selected_friend_id);
+if ($selected_id) {
+    if ($chat_type === 'friend') {
+        $chat_history = $message->getChatHistory($user_id, $selected_id);
+    } elseif ($chat_type === 'group') {
+        $chat_history = $group->getGroupMessages($selected_id, $user_id);
+    }
 }
 
 // 获取待处理的好友请求
@@ -407,7 +425,7 @@ $user_ip = getUserIP();
         .messages-container {
             flex: 1;
             padding: 20px;
-            padding-bottom: 140px;
+            padding-bottom: 190px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
@@ -739,46 +757,81 @@ $user_ip = getUserIP();
     <!-- 主内容区域 -->
     <div class="main-content">
         <!-- 好友列表 -->
-        <div class="friends-list <?php echo $selected_friend_id ? 'hidden' : ''; ?>">
+        <div class="friends-list <?php echo $selected_id ? 'hidden' : ''; ?>">
             <div class="friends-header">
                 <input type="text" class="search-input" placeholder="搜索好友..." id="search-input">
             </div>
-            <?php foreach ($friends as $friend_item): ?>
-                <div class="friend-item <?php echo $selected_friend_id == $friend_item['id'] ? 'active' : ''; ?>" data-friend-id="<?php echo $friend_item['id']; ?>">
-                    <div class="friend-avatar">
-                        <?php if (!empty($friend_item['avatar'])): ?>
-                            <img src="<?php echo $friend_item['avatar']; ?>" alt="<?php echo $friend_item['username']; ?>" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
-                        <?php else: ?>
-                            <?php echo substr($friend_item['username'], 0, 2); ?>
-                        <?php endif; ?>
-                        <div class="status-indicator <?php echo $friend_item['status']; ?>"></div>
+            
+            <!-- 聊天类型切换 -->
+            <div style="display: flex; background: white; border-bottom: 1px solid #e0e0e0;">
+                <button class="chat-type-btn <?php echo $chat_type === 'friend' ? 'active' : ''; ?>" onclick="switchChatType('friend')" style="flex: 1; padding: 12px; border: none; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: <?php echo $chat_type === 'friend' ? '#667eea' : '#666'; ?>; border-bottom: 2px solid <?php echo $chat_type === 'friend' ? '#667eea' : 'transparent'; ?>">好友</button>
+                <button class="chat-type-btn <?php echo $chat_type === 'group' ? 'active' : ''; ?>" onclick="switchChatType('group')" style="flex: 1; padding: 12px; border: none; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: <?php echo $chat_type === 'group' ? '#667eea' : '#666'; ?>; border-bottom: 2px solid <?php echo $chat_type === 'group' ? '#667eea' : 'transparent'; ?>">群聊</button>
+            </div>
+            
+            <!-- 好友列表内容 -->
+            <div id="friends-list-content" style="<?php echo $chat_type === 'friend' ? 'display: block;' : 'display: none;'; ?>">
+                <?php foreach ($friends as $friend_item): ?>
+                    <div class="friend-item <?php echo $chat_type === 'friend' && $selected_id == $friend_item['id'] ? 'active' : ''; ?>" data-friend-id="<?php echo $friend_item['id']; ?>">
+                        <div class="friend-avatar">
+                            <?php if (!empty($friend_item['avatar'])): ?>
+                                <img src="<?php echo $friend_item['avatar']; ?>" alt="<?php echo $friend_item['username']; ?>" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
+                            <?php else: ?>
+                                <?php echo substr($friend_item['username'], 0, 2); ?>
+                            <?php endif; ?>
+                            <div class="status-indicator <?php echo $friend_item['status']; ?>"></div>
+                        </div>
+                        <div class="friend-info">
+                            <h3><?php echo $friend_item['username']; ?></h3>
+                            <p><?php echo $friend_item['status'] == 'online' ? '在线' : '离线'; ?></p>
+                        </div>
                     </div>
-                    <div class="friend-info">
-                        <h3><?php echo $friend_item['username']; ?></h3>
-                        <p><?php echo $friend_item['status'] == 'online' ? '在线' : '离线'; ?></p>
+                <?php endforeach; ?>
+            </div>
+            
+            <!-- 群聊列表内容 -->
+            <div id="groups-list-content" style="<?php echo $chat_type === 'group' ? 'display: block;' : 'display: none;'; ?>">
+                <?php foreach ($groups as $group_item): ?>
+                    <div class="friend-item <?php echo $chat_type === 'group' && $selected_id == $group_item['id'] ? 'active' : ''; ?>" data-group-id="<?php echo $group_item['id']; ?>">
+                        <div class="friend-avatar" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);">
+                            <?php echo substr($group_item['name'], 0, 2); ?>
+                        </div>
+                        <div class="friend-info">
+                            <h3><?php echo $group_item['name']; ?></h3>
+                            <p>成员: <?php echo $group_item['member_count']; ?>人</p>
+                        </div>
                     </div>
-                </div>
-            <?php endforeach; ?>
+                <?php endforeach; ?>
+            </div>
         </div>
         
         <!-- 聊天区域 -->
-        <div class="chat-area <?php echo $selected_friend_id ? 'active' : ''; ?>">
-            <?php if ($selected_friend): ?>
+        <div class="chat-area <?php echo $selected_id ? 'active' : ''; ?>">
+            <?php if ($selected_friend || $selected_group) { ?>
                 <div class="chat-header">
                     <button class="back-btn" onclick="showFriendsList()" style="background: none; border: none; font-size: 18px; color: #667eea; margin-right: 10px;">
                         ←
                     </button>
-                    <div class="friend-avatar">
-                        <?php if (!empty($selected_friend['avatar'])): ?>
-                            <img src="<?php echo $selected_friend['avatar']; ?>" alt="<?php echo $selected_friend['username']; ?>" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
-                        <?php else: ?>
-                            <?php echo substr($selected_friend['username'], 0, 2); ?>
-                        <?php endif; ?>
-                        <div class="status-indicator <?php echo $selected_friend['status']; ?>"></div>
+                    <div class="friend-avatar" style="<?php echo $selected_group ? 'background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);' : ''; ?>">
+                        <?php if ($selected_friend) { ?>
+                            <?php if (!empty($selected_friend['avatar'])) { ?>
+                                <img src="<?php echo $selected_friend['avatar']; ?>" alt="<?php echo $selected_friend['username']; ?>" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">
+                            <?php } else { ?>
+                                <?php echo substr($selected_friend['username'], 0, 2); ?>
+                            <?php } ?>
+                            <div class="status-indicator <?php echo $selected_friend['status']; ?>"></div>
+                        <?php } elseif ($selected_group) { ?>
+                            <?php echo substr($selected_group['name'], 0, 2); ?>
+                        <?php } ?>
                     </div>
                     <div class="chat-header-info">
-                        <h2><?php echo $selected_friend['username']; ?></h2>
-                        <p><?php echo $selected_friend['status'] == 'online' ? '在线' : '离线'; ?></p>
+                        <h2><?php echo $selected_friend ? $selected_friend['username'] : $selected_group['name']; ?></h2>
+                        <p>
+                            <?php if ($selected_friend) { ?>
+                                <?php echo $selected_friend['status'] == 'online' ? '在线' : '离线'; ?>
+                            <?php } elseif ($selected_group) { ?>
+                                成员: <?php echo $selected_group['member_count']; ?>人
+                            <?php } ?>
+                        </p>
                     </div>
                 </div>
                 
@@ -812,7 +865,11 @@ $user_ip = getUserIP();
                 
                 <div class="input-area">
                     <form id="message-form" enctype="multipart/form-data">
-                        <input type="hidden" name="friend_id" value="<?php echo $selected_friend_id; ?>">
+                        <?php if ($selected_friend) { ?>
+                            <input type="hidden" name="friend_id" value="<?php echo $selected_id; ?>">
+                        <?php } elseif ($selected_group) { ?>
+                            <input type="hidden" name="group_id" value="<?php echo $selected_id; ?>">
+                        <?php } ?>
                         <div class="input-wrapper">
                             <textarea id="message-input" name="message" placeholder="输入消息..."></textarea>
                         </div>
@@ -827,12 +884,12 @@ $user_ip = getUserIP();
                         </div>
                     </form>
                 </div>
-            <?php else: ?>
+            <?php } else { ?>
                 <div class="messages-container" style="justify-content: center; align-items: center; text-align: center;">
                     <h2 style="color: #666; margin-bottom: 10px;">选择一个好友开始聊天</h2>
                     <p style="color: #999;">从左侧列表中选择一个好友，开始你们的对话</p>
                 </div>
-            <?php endif; ?>
+            <?php } ?>
         </div>
     </div>
     
@@ -869,6 +926,27 @@ $user_ip = getUserIP();
         </div>
     </div>
     
+    <!-- 添加好友模态框 -->
+    <div class="modal" id="add-friend-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 2000; flex-direction: column; align-items: center; justify-content: center;">
+        <div style="background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px;">
+            <h3 style="margin-bottom: 20px; color: #333; text-align: center;">添加好友</h3>
+            <form id="add-friend-form">
+                <div style="margin-bottom: 20px;">
+                    <label for="friend-username" style="display: block; margin-bottom: 8px; color: #666; font-weight: 500;">用户名</label>
+                    <input type="text" id="friend-username" name="username" placeholder="请输入要添加的好友用户名" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: all 0.2s ease;" required>
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <label for="friend-message" style="display: block; margin-bottom: 8px; color: #666; font-weight: 500;">验证消息</label>
+                    <textarea id="friend-message" name="message" placeholder="请输入验证消息" rows="3" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; resize: vertical; outline: none; transition: all 0.2s ease;"></textarea>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button type="button" onclick="closeAddFriendModal()" style="flex: 1; padding: 12px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">取消</button>
+                    <button type="submit" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">发送请求</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
         // 切换菜单
         function toggleMenu() {
@@ -880,9 +958,53 @@ $user_ip = getUserIP();
         
         // 显示添加好友模态框
         function showAddFriendModal() {
-            alert('添加好友功能开发中...');
+            const modal = document.getElementById('add-friend-modal');
+            modal.style.display = 'flex';
             toggleMenu();
         }
+        
+        // 关闭添加好友模态框
+        function closeAddFriendModal() {
+            const modal = document.getElementById('add-friend-modal');
+            modal.style.display = 'none';
+            // 重置表单
+            document.getElementById('add-friend-form').reset();
+        }
+        
+        // 处理添加好友表单提交
+        document.getElementById('add-friend-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const username = formData.get('username');
+            const message = formData.get('message') || '';
+            
+            try {
+                const response = await fetch('friend.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        action: 'send_request',
+                        username: username,
+                        message: message
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('好友请求已发送');
+                    closeAddFriendModal();
+                } else {
+                    alert(result.message || '发送失败，请稍后重试');
+                }
+            } catch (error) {
+                console.error('添加好友请求失败:', error);
+                alert('网络错误，请稍后重试');
+            }
+        });
         
         // 扫码登录相关变量
         let scanner = null;
@@ -908,12 +1030,15 @@ $user_ip = getUserIP();
         // 初始化扫码器
         async function initScanner() {
             try {
-                // 请求相机权限，优先使用前置相机
+                // 请求相机权限，优先使用后置相机（适合扫码）
+                // 提高相机分辨率，添加自动对焦
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
-                        facingMode: 'user',
-                        width: { ideal: 400 },
-                        height: { ideal: 400 }
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        focusMode: 'continuous',
+                        exposureMode: 'continuous'
                     }
                 });
                 
@@ -921,10 +1046,8 @@ $user_ip = getUserIP();
                 video.srcObject = stream;
                 await video.play();
                 
-                // 等待视频加载完成后开始扫描
-                video.onloadeddata = () => {
-                    startScanning(video);
-                };
+                // 立即开始扫描，不需要等待onloadeddata
+                startScanning(video);
             } catch (error) {
                 console.error('相机访问失败:', error);
                 const hint = document.getElementById('scan-hint');
@@ -938,47 +1061,64 @@ $user_ip = getUserIP();
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
+            // 设置扫码提示
+            const hint = document.getElementById('scan-hint');
+            hint.textContent = '正在扫描二维码...';
+            hint.style.color = '#4caf50';
+            
             function scanFrame() {
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    // 确保canvas尺寸与视频尺寸匹配
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                     
-                    // 获取图像数据
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    
-                    // 使用ZXing库或其他方式解码二维码（这里使用简单的方式，实际项目中应使用专门的二维码库）
-                    // 这里我们使用一个简单的方法，通过canvas.toDataURL()传递给服务器解码
-                    // 但为了简化，我们假设前端可以直接解码
-                    // 实际项目中建议使用jsQR库等前端二维码解码库
-                    
-                    // 这里模拟二维码解码，实际项目中应替换为真实的解码逻辑
-                    // 由于浏览器限制，我们使用一个简单的方法来模拟
-                    
-                    // 注意：实际项目中，您应该引入一个二维码解码库，如jsQR
-                    // 这里我们使用一个简化的方式，直接读取URL参数
-                    
-                    // 假设我们已经解码出二维码内容
-                    // 这里我们使用一个定时器来模拟扫描过程
-                    
-                    // 实际项目中，您应该使用类似这样的代码：
-                    /*
-                    const code = jsQR(imageData.data, imageData.width, imageData.height);
-                    if (code) {
-                        handleScanResult(code.data);
-                    } else {
+                    try {
+                        // 获取图像数据
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        
+                        // 检查jsQR库是否已加载
+                        if (typeof jsQR === 'undefined') {
+                            // jsQR库未加载，显示错误
+                            hint.textContent = '二维码库加载中...';
+                            hint.style.color = '#ff9800';
+                            // 继续扫描
+                            requestAnimationFrame(scanFrame);
+                            console.log('jsQR库未加载，等待加载完成');
+                            return;
+                        }
+                        
+                        // 使用jsQR库解码二维码，添加更详细的配置
+                        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                            inversionAttempts: 'both', // 尝试识别正常和反色二维码，提高识别率
+                            // 提高识别率的配置
+                        });
+                        
+                        if (code) {
+                            // 扫描成功，更新提示
+                            hint.textContent = '扫描成功！';
+                            hint.style.color = '#4caf50';
+                            console.log('扫描成功，二维码内容:', code.data);
+                            // 处理扫描结果
+                            handleScanResult(code.data);
+                        } else {
+                            // 继续扫描
+                            requestAnimationFrame(scanFrame);
+                            console.log('未识别到二维码，继续扫描');
+                        }
+                    } catch (error) {
+                        console.error('扫描错误:', error);
+                        // 继续扫描
                         requestAnimationFrame(scanFrame);
                     }
-                    */
-                    
-                    // 简化版本：每500毫秒检查一次
-                    setTimeout(scanFrame, 500);
                 } else {
+                    // 视频还没准备好，继续等待
                     requestAnimationFrame(scanFrame);
                 }
             }
             
-            scanFrame();
+            // 使用requestAnimationFrame提高扫描频率
+            requestAnimationFrame(scanFrame);
         }
         
         // 停止扫描
@@ -991,30 +1131,48 @@ $user_ip = getUserIP();
             }
         }
         
-        // 处理扫描结果（实际项目中应连接到二维码解码库）
+        // 处理扫描结果
         function handleScanResult(result) {
             if (!result) return;
             
+            console.log('扫描到的二维码内容:', result);
+            
             // 检查是否是本站的扫码登录链接
             const domain = window.location.host;
+            console.log('当前域名:', domain);
+            
             if (result.includes(domain) && result.includes('scan_login.php')) {
                 // 解析URL获取qid
-                const url = new URL(result);
-                const qid = url.searchParams.get('qid');
-                
-                if (qid) {
-                    currentScanUrl = result;
-                    currentQid = qid;
+                try {
+                    const url = new URL(result);
+                    const qid = url.searchParams.get('qid');
                     
-                    // 获取当前IP地址
-                    currentIpAddress = '<?php echo $user_ip; ?>';
+                    console.log('解析到的qid:', qid);
                     
-                    // 显示确认登录对话框
-                    showConfirmModal();
-                    
-                    // 停止扫描
-                    closeScanModal();
+                    if (qid) {
+                        currentScanUrl = result;
+                        currentQid = qid;
+                        
+                        // 获取当前IP地址
+                        currentIpAddress = '<?php echo $user_ip; ?>';
+                        
+                        // 显示确认登录对话框
+                        console.log('显示确认登录对话框');
+                        showConfirmModal();
+                        
+                        // 停止扫描
+                        console.log('停止扫描');
+                        closeScanModal();
+                    } else {
+                        console.log('未解析到qid');
+                    }
+                } catch (error) {
+                    console.error('URL解析错误:', error);
+                    alert('二维码格式错误，请扫描正确的登录二维码');
                 }
+            } else {
+                console.log('不是本站的扫码登录链接');
+                alert('不是本站的扫码登录链接');
             }
         }
         
@@ -1051,7 +1209,7 @@ $user_ip = getUserIP();
                     },
                     body: new URLSearchParams({
                         'qid': currentQid,
-                        'username': '<?php echo $username; ?>',
+                        'user': '<?php echo $username; ?>',
                         'source': 'mobilechat.php'
                     })
                 });
@@ -1120,17 +1278,177 @@ $user_ip = getUserIP();
         };
         document.head.appendChild(script);
         
+        // 自定义音频播放器类
+        class CustomAudioPlayer {
+            constructor(audioUrl) {
+                this.audioUrl = audioUrl;
+                this.isPlaying = false;
+                this.audio = null;
+                this.container = null;
+            }
+            
+            // 创建音频播放器
+            createPlayer() {
+                // 创建容器
+                this.container = document.createElement('div');
+                this.container.className = 'custom-audio-player';
+                
+                // 创建播放按钮
+                const playBtn = document.createElement('button');
+                playBtn.className = 'audio-play-btn';
+                playBtn.innerHTML = '▶';
+                playBtn.title = '播放';
+                
+                // 创建进度条容器
+                const progressContainer = document.createElement('div');
+                progressContainer.className = 'audio-progress-container';
+                
+                // 创建进度条
+                const progressBar = document.createElement('div');
+                progressBar.className = 'audio-progress-bar';
+                
+                // 创建进度
+                const progress = document.createElement('div');
+                progress.className = 'audio-progress';
+                progress.style.width = '0%';
+                
+                // 创建时间显示
+                const timeDisplay = document.createElement('span');
+                timeDisplay.className = 'audio-time';
+                timeDisplay.textContent = '0:00';
+                
+                // 创建时长显示
+                const durationDisplay = document.createElement('span');
+                durationDisplay.className = 'audio-duration';
+                durationDisplay.textContent = '0:00';
+                
+                // 创建隐藏的audio元素
+                this.audio = document.createElement('audio');
+                this.audio.src = this.audioUrl;
+                this.audio.preload = 'metadata';
+                
+                // 组装播放器
+                progressBar.appendChild(progress);
+                progressContainer.appendChild(progressBar);
+                this.container.appendChild(playBtn);
+                this.container.appendChild(progressContainer);
+                this.container.appendChild(timeDisplay);
+                this.container.appendChild(durationDisplay);
+                this.container.appendChild(this.audio);
+                
+                // 添加事件监听
+                this.setupEventListeners(playBtn, progressBar, progress, timeDisplay, durationDisplay);
+                
+                return this.container;
+            }
+            
+            // 设置事件监听
+            setupEventListeners(playBtn, progressBar, progress, timeDisplay, durationDisplay) {
+                // 播放/暂停按钮点击事件
+                playBtn.addEventListener('click', () => {
+                    this.togglePlay(playBtn);
+                });
+                
+                // 音频播放事件
+                this.audio.addEventListener('play', () => {
+                    this.isPlaying = true;
+                    playBtn.innerHTML = '⏸';
+                    playBtn.className = 'audio-play-btn paused';
+                });
+                
+                // 音频暂停事件
+                this.audio.addEventListener('pause', () => {
+                    this.isPlaying = false;
+                    playBtn.innerHTML = '▶';
+                    playBtn.className = 'audio-play-btn';
+                });
+                
+                // 音频结束事件
+                this.audio.addEventListener('ended', () => {
+                    this.isPlaying = false;
+                    playBtn.innerHTML = '▶';
+                    playBtn.className = 'audio-play-btn';
+                    progress.style.width = '0%';
+                    timeDisplay.textContent = '0:00';
+                    this.audio.currentTime = 0;
+                });
+                
+                // 音频时间更新事件
+                this.audio.addEventListener('timeupdate', () => {
+                    this.updateProgress(progress, timeDisplay);
+                });
+                
+                // 音频加载元数据事件
+                this.audio.addEventListener('loadedmetadata', () => {
+                    durationDisplay.textContent = this.formatTime(this.audio.duration);
+                });
+                
+                // 进度条点击事件
+                progressBar.addEventListener('click', (e) => {
+                    this.seek(e, progressBar, progress);
+                });
+            }
+            
+            // 切换播放/暂停
+            togglePlay(playBtn) {
+                if (this.isPlaying) {
+                    this.audio.pause();
+                } else {
+                    this.audio.play();
+                }
+            }
+            
+            // 更新进度
+            updateProgress(progress, timeDisplay) {
+                const percent = (this.audio.currentTime / this.audio.duration) * 100;
+                progress.style.width = percent + '%';
+                timeDisplay.textContent = this.formatTime(this.audio.currentTime);
+            }
+            
+            // 进度条拖动定位
+            seek(e, progressBar, progress) {
+                const rect = progressBar.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                this.audio.currentTime = percent * this.audio.duration;
+                progress.style.width = percent * 100 + '%';
+            }
+            
+            // 格式化时间
+            formatTime(seconds) {
+                if (isNaN(seconds)) return '0:00';
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins}:${secs.toString().padStart(2, '0')}`;
+            }
+        }
+        
+        // 转换URL为链接
+        function convertUrlsToLinks(text) {
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            return text.replace(urlRegex, '<a href="$1" class="message-link" target="_blank" rel="noopener noreferrer">$1</a>');
+        }
+        
         // 好友选择
         document.querySelectorAll('.friend-item').forEach(item => {
             item.addEventListener('click', () => {
                 const friendId = item.dataset.friendId;
-                window.location.href = `mobilechat.php?friend_id=${friendId}`;
+                const groupId = item.dataset.groupId;
+                if (friendId) {
+                    window.location.href = `mobilechat.php?chat_type=friend&id=${friendId}`;
+                } else if (groupId) {
+                    window.location.href = `mobilechat.php?chat_type=group&id=${groupId}`;
+                }
             });
         });
         
         // 显示好友列表
         function showFriendsList() {
             window.location.href = 'mobilechat.php';
+        }
+        
+        // 切换聊天类型
+        function switchChatType(chatType) {
+            window.location.href = `mobilechat.php?chat_type=${chatType}`;
         }
         
         // 消息相关函数
@@ -1141,9 +1459,8 @@ $user_ip = getUserIP();
             const avatarDiv = document.createElement('div');
             avatarDiv.className = 'message-avatar';
             
-            // 获取当前用户头像和好友头像
+            // 获取当前用户头像
             const currentUserAvatar = '<?php echo !empty($current_user['avatar']) ? $current_user['avatar'] : ''; ?>';
-            const friendAvatar = '<?php echo $selected_friend && !empty($selected_friend['avatar']) ? $selected_friend['avatar'] : ''; ?>';
             
             if (isSent) {
                 if (currentUserAvatar) {
@@ -1156,29 +1473,55 @@ $user_ip = getUserIP();
                     avatarDiv.textContent = '<?php echo substr($username, 0, 2); ?>';
                 }
             } else {
-                if (friendAvatar) {
+                // 接收的消息，使用发送者头像（适用于群聊和好友聊天）
+                if (message.avatar) {
+                    // 群聊消息，使用发送者的头像
                     const img = document.createElement('img');
-                    img.src = friendAvatar;
-                    img.alt = '<?php echo $selected_friend ? $selected_friend['username'] : ''; ?>';
+                    img.src = message.avatar;
+                    img.alt = message.username || '未知用户';
                     img.style.cssText = 'width: 100%; height: 100%; border-radius: 50%; object-fit: cover;';
                     avatarDiv.appendChild(img);
                 } else {
-                    avatarDiv.textContent = '<?php echo $selected_friend ? substr($selected_friend['username'], 0, 2) : ''; ?>';
+                    // 好友聊天，使用好友头像或用户名首字母
+                    const friendAvatar = '<?php echo $selected_friend && !empty($selected_friend['avatar']) ? $selected_friend['avatar'] : ''; ?>';
+                    const friendName = '<?php echo $selected_friend ? $selected_friend['username'] : ''; ?>';
+                    
+                    if (friendAvatar) {
+                        const img = document.createElement('img');
+                        img.src = friendAvatar;
+                        img.alt = friendName;
+                        img.style.cssText = 'width: 100%; height: 100%; border-radius: 50%; object-fit: cover;';
+                        avatarDiv.appendChild(img);
+                    } else {
+                        avatarDiv.textContent = friendName ? friendName.substring(0, 2) : '?';
+                    }
                 }
             }
             
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
             
-            if (message.type === 'text') {
+            // 处理文本消息
+            if ((message.type === 'text' || !message.type) && message.content) {
                 const textDiv = document.createElement('div');
                 textDiv.className = 'message-text';
-                textDiv.textContent = message.content;
+                // 转换URL为链接
+                const textWithLinks = convertUrlsToLinks(message.content);
+                textDiv.innerHTML = textWithLinks;
                 contentDiv.appendChild(textDiv);
-            } else {
+            }
+            
+            // 处理文件消息
+            if (message.file_path) {
+                // 获取文件扩展名和MIME类型
                 const fileName = message.file_name;
-                const fileExtension = fileName.split('.').pop().toLowerCase();
                 const fileUrl = message.file_path;
+                
+                // 确保fileName存在且有扩展名
+                let fileExtension = '';
+                if (fileName && fileName.includes('.')) {
+                    fileExtension = fileName.split('.').pop().toLowerCase();
+                }
                 
                 // 禁止显示的文件扩展名
                 const forbiddenExtensions = ['php', 'html', 'js', 'htm', 'css', 'xml'];
@@ -1190,43 +1533,57 @@ $user_ip = getUserIP();
                     forbiddenMessage.textContent = '该文件类型不支持显示';
                     contentDiv.appendChild(forbiddenMessage);
                 } else {
-                    // 图片类型
+                    // 图片类型 - 确保所有图片文件都显示为图片
                     const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'ico'];
                     if (imageExtensions.includes(fileExtension)) {
+                        const imgContainer = document.createElement('div');
+                        imgContainer.style.cssText = 'display: inline-block; margin: 5px;';
+                        
                         const img = document.createElement('img');
                         img.src = fileUrl;
                         img.alt = fileName;
-                        img.style.cssText = 'max-width: 200px; max-height: 200px; cursor: pointer; border-radius: 8px; transition: transform 0.2s;';
+                        img.style.cssText = `
+                            max-width: 200px;
+                            max-height: 200px;
+                            cursor: pointer;
+                            border-radius: 8px;
+                            transition: transform 0.2s;
+                            object-fit: cover;
+                        `;
                         
                         // 添加图片加载失败处理
                         img.onerror = () => {
                             img.remove();
                             const errorMessage = document.createElement('div');
                             errorMessage.style.cssText = 'color: #999; font-size: 14px; padding: 10px; background: #f8f9fa; border-radius: 8px;';
-                            errorMessage.textContent = '文件已被清理，每15天清理一次uploads目录';
+                            errorMessage.textContent = '文件已被清理，每7天清理一次uploads目录';
                             contentDiv.appendChild(errorMessage);
                         };
                         
-                        contentDiv.appendChild(img);
+                        imgContainer.appendChild(img);
+                        contentDiv.appendChild(imgContainer);
                     } 
-                    // 音频类型
+                    // 音频类型 - 确保所有音频文件都显示为自定义音频播放器
                     else if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma', 'aiff', 'opus', 'webm'].includes(fileExtension)) {
-                        // 创建简单的音频播放器
-                        const audio = document.createElement('audio');
-                        audio.src = fileUrl;
-                        audio.controls = true;
-                        audio.style.cssText = 'max-width: 250px;';
+                        const audioContainer = document.createElement('div');
+                        audioContainer.style.cssText = 'margin: 5px 0;';
+                        
+                        // 创建自定义音频播放器
+                        const audioPlayer = new CustomAudioPlayer(fileUrl);
+                        const playerElement = audioPlayer.createPlayer();
                         
                         // 添加音频加载失败处理
-                        audio.onerror = () => {
-                            audio.remove();
+                        const audioElement = playerElement.querySelector('audio');
+                        audioElement.onerror = () => {
+                            audioContainer.innerHTML = '';
                             const errorMessage = document.createElement('div');
                             errorMessage.style.cssText = 'color: #999; font-size: 14px; padding: 10px; background: #f8f9fa; border-radius: 8px;';
-                            errorMessage.textContent = '文件已被清理，每15天清理一次uploads目录';
-                            contentDiv.appendChild(errorMessage);
+                            errorMessage.textContent = '文件已被清理，每7天清理一次uploads目录';
+                            audioContainer.appendChild(errorMessage);
                         };
                         
-                        contentDiv.appendChild(audio);
+                        audioContainer.appendChild(playerElement);
+                        contentDiv.appendChild(audioContainer);
                     } 
                     // 其他文件类型
                     else {
@@ -1235,7 +1592,22 @@ $user_ip = getUserIP();
                         const fileLink = document.createElement('a');
                         fileLink.href = fileUrl;
                         fileLink.download = fileName;
-                        fileLink.style.cssText = 'color: #667eea; text-decoration: none; font-weight: 600;';
+                        fileLink.style.cssText = `
+                            display: inline-block;
+                            padding: 8px 12px;
+                            background: #f0f0f0;
+                            color: #333;
+                            text-decoration: none;
+                            border-radius: 4px;
+                            margin: 5px 0;
+                            transition: background-color 0.2s;
+                        `;
+                        fileLink.onmouseover = () => {
+                            fileLink.style.background = '#e0e0e0';
+                        };
+                        fileLink.onmouseout = () => {
+                            fileLink.style.background = '#f0f0f0';
+                        };
                         
                         // 添加点击事件处理，检查文件是否存在
                         fileLink.onclick = async (e) => {
@@ -1252,7 +1624,7 @@ $user_ip = getUserIP();
                                     fileLinkContainer.innerHTML = '';
                                     const errorMessage = document.createElement('div');
                                     errorMessage.style.cssText = 'color: #999; font-size: 14px; padding: 10px; background: #f8f9fa; border-radius: 8px;';
-                                    errorMessage.textContent = '文件已被清理，每15天清理一次uploads目录';
+                                    errorMessage.textContent = '文件已被清理，每7天清理一次uploads目录';
                                     fileLinkContainer.appendChild(errorMessage);
                                 }
                             } catch (error) {
@@ -1260,12 +1632,19 @@ $user_ip = getUserIP();
                                 fileLinkContainer.innerHTML = '';
                                 const errorMessage = document.createElement('div');
                                 errorMessage.style.cssText = 'color: #999; font-size: 14px; padding: 10px; background: #f8f9fa; border-radius: 8px;';
-                                errorMessage.textContent = '文件已被清理，每15天清理一次uploads目录';
+                                errorMessage.textContent = '文件已被清理，每7天清理一次uploads目录';
                                 fileLinkContainer.appendChild(errorMessage);
                             }
                         };
                         
-                        fileLink.textContent = fileName;
+                        const fileIcon = document.createElement('span');
+                        fileIcon.textContent = '📎 ';
+                        
+                        const fileNameSpan = document.createElement('span');
+                        fileNameSpan.textContent = fileName;
+                        
+                        fileLink.appendChild(fileIcon);
+                        fileLink.appendChild(fileNameSpan);
                         fileLinkContainer.appendChild(fileLink);
                         contentDiv.appendChild(fileLinkContainer);
                     }

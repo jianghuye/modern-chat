@@ -192,11 +192,11 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 $conn->beginTransaction();
                 
                 // 清除消息中的文件记录
-                $stmt = $conn->prepare("UPDATE messages SET file_path = NULL, file_name = NULL, file_type = NULL WHERE file_path IS NOT NULL");
+                $stmt = $conn->prepare("UPDATE messages SET file_path = NULL, file_name = NULL, file_size = NULL, type = 'text' WHERE file_path IS NOT NULL");
                 $stmt->execute();
                 
                 // 清除群聊消息中的文件记录
-                $stmt = $conn->prepare("UPDATE group_messages SET file_path = NULL, file_name = NULL, file_type = NULL WHERE file_path IS NOT NULL");
+                $stmt = $conn->prepare("UPDATE group_messages SET file_path = NULL, file_name = NULL, file_size = NULL, type = 'text' WHERE file_path IS NOT NULL");
                 $stmt->execute();
                 
                 $conn->commit();

@@ -1,3 +1,6 @@
+-- 使用chat数据库
+USE chat;
+
 -- 创建群聊邀请表
 CREATE TABLE IF NOT EXISTS group_invitations (
     id INT AUTO_INCREMENT PRIMARY KEY,

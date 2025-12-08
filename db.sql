@@ -150,6 +150,76 @@ CREATE TABLE IF NOT EXISTS feedback (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 修改groups表，添加all_user_group字段
+ALTER TABLE groups ADD COLUMN all_user_group INT DEFAULT 0 AFTER owner_id;
+
+-- 创建索引以提高查询性能
+CREATE INDEX idx_groups_all_user_group ON groups(all_user_group);
+
+-- 创建封禁表
+CREATE TABLE IF NOT EXISTS bans (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    banned_by INT NOT NULL,
+    reason TEXT NOT NULL,
+    ban_duration INT NOT NULL, -- 封禁时长（秒）
+    ban_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ban_end TIMESTAMP NULL,
+    status ENUM('active', 'expired', 'lifted') DEFAULT 'active',
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_active_ban (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建封禁日志表
+CREATE TABLE IF NOT EXISTS ban_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ban_id INT NOT NULL,
+    action ENUM('ban', 'lift', 'expire') NOT NULL,
+    action_by INT NULL,
+    action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ban_id) REFERENCES bans(id) ON DELETE CASCADE,
+    FOREIGN KEY (action_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建群聊邀请表
+CREATE TABLE IF NOT EXISTS group_invitations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_id INT NOT NULL,
+    inviter_id INT NOT NULL,
+    invitee_id INT NOT NULL,
+    status ENUM('pending', 'accepted', 'rejected', 'expired') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (inviter_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (invitee_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_invitation (group_id, inviter_id, invitee_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建入群申请表
+CREATE TABLE IF NOT EXISTS group_join_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_id INT NOT NULL,
+    user_id INT NOT NULL,
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_join_request (group_id, user_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建IP注册记录表
+CREATE TABLE IF NOT EXISTS ip_registrations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    ip_address VARCHAR(45) NOT NULL,
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 修改groups表，添加is_muted字段
+ALTER TABLE groups ADD COLUMN is_muted TINYINT(1) DEFAULT 0 AFTER all_user_group;
+
 -- 创建索引以提高查询性能
 CREATE INDEX idx_users_status ON users(status);
 CREATE INDEX idx_messages_sender_receiver ON messages(sender_id, receiver_id);
@@ -174,3 +244,11 @@ CREATE INDEX idx_group_messages_created_at ON group_messages(created_at);
 CREATE INDEX idx_feedback_user_id ON feedback(user_id);
 CREATE INDEX idx_feedback_status ON feedback(status);
 CREATE INDEX idx_feedback_created_at ON feedback(created_at);
+CREATE INDEX idx_bans_user_id ON bans(user_id);
+CREATE INDEX idx_bans_status ON bans(status);
+CREATE INDEX idx_bans_ban_end ON bans(ban_end);
+CREATE INDEX idx_ban_logs_ban_id ON ban_logs(ban_id);
+CREATE INDEX idx_ban_logs_action ON ban_logs(action);
+CREATE INDEX idx_ip_registrations_ip_address ON ip_registrations(ip_address);
+CREATE INDEX idx_ip_registrations_user_id ON ip_registrations(user_id);
+CREATE INDEX idx_ip_registrations_registered_at ON ip_registrations(registered_at);

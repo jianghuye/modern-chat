@@ -220,6 +220,39 @@ CREATE TABLE IF NOT EXISTS ip_registrations (
 -- 修改groups表，添加is_muted字段
 ALTER TABLE groups ADD COLUMN is_muted TINYINT(1) DEFAULT 0 AFTER all_user_group;
 
+-- 创建群聊封禁表
+CREATE TABLE IF NOT EXISTS group_bans (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    group_id INT NOT NULL,
+    banned_by INT NOT NULL,
+    reason TEXT NOT NULL,
+    ban_duration INT NOT NULL, -- 封禁时长（秒），0表示永久
+    ban_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ban_end TIMESTAMP NULL,
+    status ENUM('active', 'expired', 'lifted') DEFAULT 'active',
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (banned_by) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_active_group_ban (group_id) WHERE (status = 'active')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建群聊封禁日志表
+CREATE TABLE IF NOT EXISTS group_ban_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    ban_id INT NOT NULL,
+    action ENUM('ban', 'lift', 'expire') NOT NULL,
+    action_by INT NULL,
+    action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (ban_id) REFERENCES group_bans(id) ON DELETE CASCADE,
+    FOREIGN KEY (action_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建索引以提高查询性能
+CREATE INDEX idx_group_bans_group_id ON group_bans(group_id);
+CREATE INDEX idx_group_bans_status ON group_bans(status);
+CREATE INDEX idx_group_bans_ban_end ON group_bans(ban_end);
+CREATE INDEX idx_group_ban_logs_ban_id ON group_ban_logs(ban_id);
+CREATE INDEX idx_group_ban_logs_action ON group_ban_logs(action);
+
 -- 创建索引以提高查询性能
 CREATE INDEX idx_users_status ON users(status);
 CREATE INDEX idx_messages_sender_receiver ON messages(sender_id, receiver_id);

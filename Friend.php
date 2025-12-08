@@ -34,17 +34,26 @@ class Friend {
     }
     
     // 接受好友请求
-    public function acceptFriendRequest($user_id, $friend_id) {
+    public function acceptFriendRequest($user_id, $request_id) {
         try {
-            // 更新请求状态为已接受
+            // 先获取好友请求信息
             $stmt = $this->conn->prepare(
-                "UPDATE friends SET status = 'accepted' WHERE user_id = ? AND friend_id = ? AND status = 'pending'"
+                "SELECT * FROM friends WHERE id = ? AND friend_id = ? AND status = 'pending'"
             );
-            $stmt->execute([$friend_id, $user_id]);
+            $stmt->execute([$request_id, $user_id]);
+            $request = $stmt->fetch();
             
-            if ($stmt->rowCount() == 0) {
+            if (!$request) {
                 return ['success' => false, 'message' => '好友请求不存在或已处理'];
             }
+            
+            $friend_id = $request['user_id'];
+            
+            // 更新请求状态为已接受
+            $stmt = $this->conn->prepare(
+                "UPDATE friends SET status = 'accepted' WHERE id = ? AND status = 'pending'"
+            );
+            $stmt->execute([$request_id]);
             
             // 创建反向好友关系
             $stmt = $this->conn->prepare(
@@ -55,6 +64,26 @@ class Friend {
             return ['success' => true, 'message' => '好友请求已接受'];
         } catch(PDOException $e) {
             error_log("Accept Friend Request Error: " . $e->getMessage());
+            return ['success' => false, 'message' => '操作失败，请稍后重试'];
+        }
+    }
+    
+    // 拒绝好友请求
+    public function rejectFriendRequest($user_id, $request_id) {
+        try {
+            // 删除好友请求
+            $stmt = $this->conn->prepare(
+                "DELETE FROM friends WHERE id = ? AND friend_id = ? AND status = 'pending'"
+            );
+            $stmt->execute([$request_id, $user_id]);
+            
+            if ($stmt->rowCount() == 0) {
+                return ['success' => false, 'message' => '好友请求不存在或已处理'];
+            }
+            
+            return ['success' => true, 'message' => '好友请求已拒绝'];
+        } catch(PDOException $e) {
+            error_log("Reject Friend Request Error: " . $e->getMessage());
             return ['success' => false, 'message' => '操作失败，请稍后重试'];
         }
     }

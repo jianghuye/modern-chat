@@ -191,7 +191,9 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
     'change_password',
     'change_username',
     'ban_user',
-    'lift_ban'
+    'lift_ban',
+    'ban_group',
+    'lift_group_ban'
 ])) {
     $action = $_POST['action'];
     $password = isset($_POST['password']) ? $_POST['password'] : '';
@@ -461,6 +463,81 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                     header('Location: admin.php?success=用户已成功解除封禁');
                 } else {
                     header('Location: admin.php?error=解除封禁失败，用户可能未被封禁');
+                }
+                break;
+                
+            case 'ban_group':
+                // 封禁群聊
+                $group_id = intval($_POST['group_id']);
+                $reason = trim($_POST['ban_reason']);
+                $ban_duration = intval($_POST['ban_duration']); // 秒
+                
+                // 验证参数
+                if (empty($reason)) {
+                    header('Location: admin.php?error=请输入封禁理由');
+                    exit;
+                }
+                
+                try {
+                    $conn->beginTransaction();
+                    
+                    // 计算封禁结束时间
+                    $ban_end = $ban_duration > 0 ? date('Y-m-d H:i:s', time() + $ban_duration) : null;
+                    
+                    // 将该群聊的所有封禁记录状态改为非active
+                    $stmt = $conn->prepare("UPDATE group_bans SET status = 'lifted' WHERE group_id = ? AND status = 'active'");
+                    $stmt->execute([$group_id]);
+                    
+                    // 插入新的封禁记录
+                    $stmt = $conn->prepare("INSERT INTO group_bans (group_id, banned_by, reason, ban_duration, ban_end, status) VALUES (?, ?, ?, ?, ?, 'active')");
+                    $stmt->execute([$group_id, $current_user['id'], $reason, $ban_duration, $ban_end]);
+                    $ban_id = $conn->lastInsertId();
+                    
+                    // 插入封禁日志
+                    $stmt = $conn->prepare("INSERT INTO group_ban_logs (ban_id, action, action_by) VALUES (?, 'ban', ?)");
+                    $stmt->execute([$ban_id, $current_user['id']]);
+                    
+                    $conn->commit();
+                    header('Location: admin.php?success=群聊已成功封禁');
+                } catch (PDOException $e) {
+                    $conn->rollBack();
+                    error_log("Ban group error: " . $e->getMessage());
+                    header('Location: admin.php?error=封禁群聊失败：' . $e->getMessage());
+                }
+                break;
+                
+            case 'lift_group_ban':
+                // 解除群聊封禁
+                $group_id = intval($_POST['group_id']);
+                
+                try {
+                    $conn->beginTransaction();
+                    
+                    // 获取封禁记录
+                    $stmt = $conn->prepare("SELECT id FROM group_bans WHERE group_id = ? AND status = 'active'");
+                    $stmt->execute([$group_id]);
+                    $ban = $stmt->fetch();
+                    
+                    if (!$ban) {
+                        header('Location: admin.php?error=群聊未被封禁');
+                        exit;
+                    }
+                    
+                    // 更新封禁状态
+                    $stmt = $conn->prepare("UPDATE group_bans SET status = 'lifted' WHERE id = ?");
+                    $stmt->execute([$ban['id']]);
+                    
+                    // 插入解除封禁日志
+                    $stmt = $conn->prepare("INSERT INTO group_ban_logs (ban_id, action, action_by) VALUES (?, 'lift', ?)");
+                    $stmt->execute([$ban['id'], $current_user['id']]);
+                    
+                    $conn->commit();
+                    header('Location: admin.php?success=群聊封禁已成功解除');
+                } catch (PDOException $e) {
+                    $conn->rollBack();
+                    error_log("Lift group ban error: " . $e->getMessage());
+                    // 显示通用错误信息
+                    header('Location: admin.php?error=解除群聊封禁失败：' . $e->getMessage());
                 }
                 break;
                 
@@ -966,12 +1043,66 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 <h3>所有群聊</h3>
                 <div class="groups-list">
                     <?php foreach ($all_groups as $group_item): ?>
+                        <?php
+                        // 检查群聊是否有封禁记录
+                        $has_ban_record = false;
+                        try {
+                            $ban_stmt = $conn->prepare("SELECT COUNT(*) as count FROM group_bans WHERE group_id = ?");
+                            $ban_stmt->execute([$group_item['id']]);
+                            $ban_result = $ban_stmt->fetch();
+                            $has_ban_record = $ban_result['count'] > 0;
+                        } catch (PDOException $e) {
+                            // 忽略错误
+                        }
+                        ?>
                         <div class="group-item">
-                            <h4><?php echo $group_item['name']; ?></h4>
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                <h4><?php echo $group_item['name']; ?></h4>
+                                <?php if ($has_ban_record): ?>
+                                    <span onclick="showBanRecordModal('group', <?php echo $group_item['id']; ?>, '<?php echo $group_item['name']; ?>')" style="font-size: 20px; cursor: pointer; color: #ffc107;" title="查看封禁记录">⚠️</span>
+                                <?php endif; ?>
+                            </div>
                             <p>创建者: <?php echo $group_item['creator_username']; ?></p>
                             <p>群主: <?php echo $group_item['owner_username']; ?></p>
                             <p class="members">成员数量: <?php echo $group_item['member_count']; ?></p>
                             <p>创建时间: <?php echo $group_item['created_at']; ?></p>
+                            <!-- 检查群聊封禁状态 -->
+                            <?php 
+                            try {
+                                $stmt = $conn->prepare("SELECT * FROM group_bans WHERE group_id = ? AND status = 'active'");
+                                $stmt->execute([$group_item['id']]);
+                                $ban_info = $stmt->fetch();
+                                
+                                // 检查封禁是否已过期
+                                if ($ban_info && $ban_info['ban_end'] && strtotime($ban_info['ban_end']) < time()) {
+                                    // 更新封禁状态为过期
+                                    $update_stmt = $conn->prepare("UPDATE group_bans SET status = 'expired' WHERE group_id = ? AND status = 'active'");
+                                    $update_stmt->execute([$group_item['id']]);
+                                    
+                                    // 插入过期日志
+                                    $log_stmt = $conn->prepare("INSERT INTO group_ban_logs (ban_id, action, action_by) VALUES ((SELECT id FROM group_bans WHERE group_id = ? ORDER BY id DESC LIMIT 1), 'expire', NULL)");
+                                    $log_stmt->execute([$group_item['id']]);
+                                    
+                                    // 设置ban_info为null，显示封禁按钮
+                                    $ban_info = null;
+                                }
+                                
+                                if ($ban_info):
+                            ?>
+                                <div style="margin-top: 10px; padding: 8px; background: #ffebee; color: #d32f2f; border-radius: 4px; font-size: 12px;">
+                                    已封禁 - 截止时间: <?php echo $ban_info['ban_end'] ? $ban_info['ban_end'] : '永久'; ?><br>
+                                    原因: <?php echo $ban_info['reason']; ?>
+                                </div>
+                                <?php if ($ban_info['ban_end']): ?>
+                                    <button onclick="showLiftGroupBanModal(<?php echo $group_item['id']; ?>)" style="margin-top: 10px; padding: 6px 12px; background: #81c784; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 8px;">解除封禁</button>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <button onclick="showBanGroupModal(<?php echo $group_item['id']; ?>, '<?php echo $group_item['name']; ?>')" style="margin-top: 10px; padding: 6px 12px; background: #e57373; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 8px;">封禁群聊</button>
+                            <?php endif; 
+                            } catch (PDOException $e) {
+                                // 如果表不存在，忽略错误
+                            } 
+                            ?>
                             <button onclick="showClearDataModal('delete_group', <?php echo $group_item['id']; ?>)" class="delete-group-btn">解散群聊</button>
                         </div>
                     <?php endforeach; ?>
@@ -1041,8 +1172,25 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 <h3>所有用户</h3>
                 <div class="groups-list">
                     <?php foreach ($all_users as $user_item): ?>
+                        <?php
+                        // 检查用户是否有封禁记录
+                        $has_ban_record = false;
+                        try {
+                            $ban_stmt = $conn->prepare("SELECT COUNT(*) as count FROM bans WHERE user_id = ?");
+                            $ban_stmt->execute([$user_item['id']]);
+                            $ban_result = $ban_stmt->fetch();
+                            $has_ban_record = $ban_result['count'] > 0;
+                        } catch (PDOException $e) {
+                            // 忽略错误
+                        }
+                        ?>
                         <div class="group-item">
-                            <h4><?php echo $user_item['username']; ?></h4>
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                <h4><?php echo $user_item['username']; ?></h4>
+                                <?php if ($has_ban_record): ?>
+                                    <span onclick="showBanRecordModal('user', <?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="font-size: 20px; cursor: pointer; color: #ffc107;" title="查看封禁记录">⚠️</span>
+                                <?php endif; ?>
+                            </div>
                             <p>邮箱: <?php echo $user_item['email']; ?></p>
                             <p>状态: <?php echo $user_item['status']; ?></p>
                             <p>角色: <?php echo $user_item['is_admin'] ? '管理员' : '普通用户'; ?></p>
@@ -1054,7 +1202,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                             if ($ban_info):
                             ?>
                                 <div style="margin-top: 10px; padding: 8px; background: #ffebee; color: #d32f2f; border-radius: 4px; font-size: 12px;">
-                                    已封禁 - 截止时间: <?php echo $ban_info['expires_at']; ?><br>
+                                    已封禁 - 截止时间: <?php echo $ban_info['expires_at'] ? $ban_info['expires_at'] : '永久'; ?><br>
                                     原因: <?php echo $ban_info['reason']; ?>
                                 </div>
                             <?php endif; ?>
@@ -1065,7 +1213,9 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                                     <button onclick="showChangePasswordModal(<?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">修改密码</button>
                                     <button onclick="showChangeUsernameModal(<?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="padding: 6px 12px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">修改名称</button>
                                     <?php if ($ban_info): ?>
-                                        <button onclick="showLiftBanModal(<?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="padding: 6px 12px; background: #81c784; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">解除封禁</button>
+                                        <?php if ($ban_info['expires_at']): ?>
+                                            <button onclick="showLiftBanModal(<?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="padding: 6px 12px; background: #81c784; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">解除封禁</button>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <button onclick="showBanUserModal(<?php echo $user_item['id']; ?>, '<?php echo $user_item['username']; ?>')" style="padding: 6px 12px; background: #e57373; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">封禁用户</button>
                                     <?php endif; ?>
@@ -1221,6 +1371,18 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                             }
                         }
                         
+                        // 验证Email Verify Api Request，只允许GET或POST
+                        $email_verify = $updated_config['email_verify'] ?? false;
+                        $request_method = strtoupper($updated_config['email_verify_api_Request'] ?? 'POST');
+                        
+                        // 检查请求方法是否有效
+                        if ($email_verify && !in_array($request_method, ['GET', 'POST'])) {
+                            // 请求方法无效，自动关闭邮箱验证功能
+                            $updated_config['email_verify'] = false;
+                            // 将请求方法重置为默认值POST
+                            $updated_config['email_verify_api_Request'] = 'POST';
+                        }
+                        
                         // 保存更新后的配置
                         file_put_contents($config_file, json_encode($updated_config, JSON_PRETTY_PRINT));
                         
@@ -1269,6 +1431,21 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                                                     break;
                                                 case 'upload_files_max':
                                                     echo '最大允许上传文件大小（MB）';
+                                                    break;
+                                                case 'Session_Duration':
+                                                    echo '用户会话时长（小时）';
+                                                    break;
+                                                case 'email_verify':
+                                                    echo '是否启用邮箱验证功能';
+                                                    break;
+                                                case 'email_verify_api':
+                                                    echo '邮箱验证API地址';
+                                                    break;
+                                                case 'email_verify_api_Request':
+                                                    echo '邮箱验证API请求方法';
+                                                    break;
+                                                case 'email_verify_api_Verify_parameters':
+                                                    echo '邮箱验证API结果验证参数路径';
                                                     break;
                                                 default:
                                                     echo '';
@@ -1427,8 +1604,34 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 </div>
                 
                 <div style="margin-bottom: 20px;">
-                    <label for="ban-duration" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">封禁时长（小时）：</label>
-                    <input type="number" id="ban-duration" placeholder="输入封禁时长（小时）" min="1" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <label style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">封禁时长：</label>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 10px;">
+                        <div>
+                            <label for="ban-years" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">年</label>
+                            <input type="number" id="ban-years" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-months" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">月</label>
+                            <input type="number" id="ban-months" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-days" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">日</label>
+                            <input type="number" id="ban-days" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-hours" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">时</label>
+                            <input type="number" id="ban-hours" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-minutes" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">分</label>
+                            <input type="number" id="ban-minutes" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                        <input type="checkbox" id="ban-permanent" style="margin-right: 8px;">
+                        <label for="ban-permanent" style="font-size: 14px; color: #333;">永久封禁</label>
+                    </div>
+                    <p id="ban-permanent-warning" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">此操作一经设置将无法解除，请再三确认后使用</p>
                     <p id="ban-duration-error" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;"></p>
                 </div>
                 
@@ -1467,6 +1670,89 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             </div>
         </div>
         
+        <!-- 封禁群聊弹窗 -->
+        <div id="ban-group-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">封禁群聊</h3>
+                <p id="ban-group-name" style="margin-bottom: 20px; color: #666; text-align: center;"></p>
+                
+                <div style="margin-bottom: 20px;">
+                    <label for="ban-group-reason" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">封禁理由：</label>
+                    <textarea id="ban-group-reason" placeholder="请输入封禁理由" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s; resize: vertical; min-height: 100px;"></textarea>
+                    <p id="ban-group-reason-error" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;"></p>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">封禁时长：</label>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 10px;">
+                        <div>
+                            <label for="ban-group-years" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">年</label>
+                            <input type="number" id="ban-group-years" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-group-months" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">月</label>
+                            <input type="number" id="ban-group-months" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-group-days" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">日</label>
+                            <input type="number" id="ban-group-days" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-group-hours" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">时</label>
+                            <input type="number" id="ban-group-hours" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                        <div>
+                            <label for="ban-group-minutes" style="display: block; margin-bottom: 4px; font-size: 12px; color: #666;">分</label>
+                            <input type="number" id="ban-group-minutes" placeholder="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 12px; outline: none;">
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                        <input type="checkbox" id="ban-group-permanent" style="margin-right: 8px;">
+                        <label for="ban-group-permanent" style="font-size: 14px; color: #333;">永久封禁</label>
+                    </div>
+                    <p id="ban-group-permanent-warning" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">此操作一经设置将无法解除，请再三确认后使用</p>
+                    <p id="ban-group-duration-error" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;"></p>
+                </div>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-ban-group" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-ban-group" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-ban-group" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <!-- 5秒确认倒计时 -->
+                <div style="margin-bottom: 20px; text-align: center;">
+                    <p id="ban-group-countdown" style="color: #666; font-size: 14px; display: none;">请等待 <span id="ban-group-countdown-time">5</span> 秒后确认</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-ban-group-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-ban-group-btn" style="padding: 12px 25px; background: #e57373; color: white; border: none; border-radius: 8px; cursor: not-allowed; opacity: 0.6; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 解除群聊封禁弹窗 -->
+        <div id="lift-group-ban-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">解除群聊封禁</h3>
+                <p style="margin-bottom: 20px; color: #666; text-align: center;">确定要解除该群聊的封禁吗？</p>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-lift-group-ban" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-lift-group-ban" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-lift-group-ban" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-lift-group-ban-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-lift-group-ban-btn" style="padding: 12px 25px; background: #81c784; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
         <!-- 操作结果弹窗 -->
         <div id="result-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
             <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center;">
@@ -1474,6 +1760,17 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 <h3 id="result-title" style="margin-bottom: 10px; color: #333;"></h3>
                 <p id="result-message" style="margin-bottom: 20px; color: #666; font-size: 14px;"></p>
                 <button onclick="closeResultModal()" style="padding: 12px 25px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 14px; transition: background-color 0.2s;">确定</button>
+            </div>
+        </div>
+        
+        <!-- 封禁记录弹窗 -->
+        <div id="ban-record-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 id="ban-record-title" style="color: #333;">封禁记录</h3>
+                    <button onclick="closeBanRecordModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
+                </div>
+                <div id="ban-record-content"></div>
             </div>
         </div>
     </div>
@@ -1678,30 +1975,288 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             form.appendChild(passwordInput);
             
             // 添加ID字段（如果需要）
-            if (currentActionId !== '') {
-                const idInput = document.createElement('input');
-                idInput.type = 'hidden';
-                // 根据操作类型设置不同的ID字段名
-                switch(currentClearAction) {
-                    case 'delete_group':
-                        idInput.name = 'group_id';
-                        break;
-                    case 'deactivate_user':
-                    case 'delete_user':
-                        idInput.name = 'user_id';
-                        break;
-                }
-                idInput.value = currentActionId;
-                form.appendChild(idInput);
+        if (currentActionId !== '') {
+            const idInput = document.createElement('input');
+            idInput.type = 'hidden';
+            // 根据操作类型设置不同的ID字段名
+            switch(currentClearAction) {
+                case 'delete_group':
+                    idInput.name = 'group_id';
+                    break;
+                case 'deactivate_user':
+                case 'delete_user':
+                    idInput.name = 'user_id';
+                    break;
+            }
+            idInput.value = currentActionId;
+            form.appendChild(idInput);
+        }
+    }
+    
+    // 群聊封禁相关变量
+    let currentGroupId = '';
+    let groupBanCountdownInterval = null;
+    let groupBanCountdownTime = 5;
+    
+    // 显示封禁群聊弹窗
+    function showBanGroupModal(groupId, groupName) {
+        currentGroupId = groupId;
+        document.getElementById('ban-group-name').textContent = `群聊：${groupName}`;
+        
+        // 重置表单
+        document.getElementById('ban-group-reason').value = '';
+        document.getElementById('ban-group-years').value = '0';
+        document.getElementById('ban-group-months').value = '0';
+        document.getElementById('ban-group-days').value = '0';
+        document.getElementById('ban-group-hours').value = '0';
+        document.getElementById('ban-group-minutes').value = '0';
+        document.getElementById('ban-group-permanent').checked = false;
+        document.getElementById('admin-password-ban-group').value = '';
+        
+        // 隐藏错误提示
+        document.getElementById('ban-group-reason-error').style.display = 'none';
+        document.getElementById('ban-group-duration-error').style.display = 'none';
+        document.getElementById('admin-password-error-ban-group').style.display = 'none';
+        
+        // 重置按钮状态
+        const confirmBtn = document.getElementById('confirm-ban-group-btn');
+        confirmBtn.disabled = true;
+        confirmBtn.style.cursor = 'not-allowed';
+        confirmBtn.style.opacity = '0.6';
+        
+        // 隐藏倒计时
+        document.getElementById('ban-group-countdown').style.display = 'none';
+        
+        // 显示弹窗
+        document.getElementById('ban-group-modal').style.display = 'flex';
+        
+        // 添加事件监听器
+        document.getElementById('cancel-ban-group-btn').addEventListener('click', closeBanGroupModal);
+        document.getElementById('confirm-ban-group-btn').addEventListener('click', handleConfirmBanGroup);
+        document.getElementById('ban-group-permanent').addEventListener('change', handleBanGroupPermanentChange);
+        document.getElementById('admin-password-ban-group').addEventListener('input', handleBanGroupPasswordInput);
+    }
+    
+    // 关闭封禁群聊弹窗
+    function closeBanGroupModal() {
+        document.getElementById('ban-group-modal').style.display = 'none';
+        
+        // 清除倒计时
+        if (groupBanCountdownInterval) {
+            clearInterval(groupBanCountdownInterval);
+            groupBanCountdownInterval = null;
+        }
+        
+        // 移除事件监听器
+        document.getElementById('cancel-ban-group-btn').removeEventListener('click', closeBanGroupModal);
+        document.getElementById('confirm-ban-group-btn').removeEventListener('click', handleConfirmBanGroup);
+        document.getElementById('ban-group-permanent').removeEventListener('change', handleBanGroupPermanentChange);
+        document.getElementById('admin-password-ban-group').removeEventListener('input', handleBanGroupPasswordInput);
+    }
+    
+    // 处理永久封禁复选框变化
+    function handleBanGroupPermanentChange() {
+        const isPermanent = document.getElementById('ban-group-permanent').checked;
+        const durationInputs = ['ban-group-years', 'ban-group-months', 'ban-group-days', 'ban-group-hours', 'ban-group-minutes'];
+        const warningEl = document.getElementById('ban-group-permanent-warning');
+        
+        durationInputs.forEach(id => {
+            const input = document.getElementById(id);
+            input.disabled = isPermanent;
+            if (isPermanent) {
+                input.value = '0';
+            }
+        });
+        
+        // 显示或隐藏永久封禁警告
+        warningEl.style.display = isPermanent ? 'block' : 'none';
+    }
+    
+    // 处理封禁群聊密码输入
+    function handleBanGroupPasswordInput() {
+        document.getElementById('admin-password-error-ban-group').style.display = 'none';
+        
+        // 密码输入后开始5秒倒计时
+        const password = document.getElementById('admin-password-ban-group').value;
+        if (password) {
+            startGroupBanCountdown();
+        } else {
+            // 清除倒计时
+            if (groupBanCountdownInterval) {
+                clearInterval(groupBanCountdownInterval);
+                groupBanCountdownInterval = null;
             }
             
-            // 添加到页面并提交
-            document.body.appendChild(form);
-            form.submit();
-            
-            // 关闭弹窗
-            closeClearDataModal();
+            // 重置按钮和倒计时
+            const confirmBtn = document.getElementById('confirm-ban-group-btn');
+            confirmBtn.disabled = true;
+            confirmBtn.style.cursor = 'not-allowed';
+            confirmBtn.style.opacity = '0.6';
+            document.getElementById('ban-group-countdown').style.display = 'none';
         }
+    }
+    
+    // 开始封禁群聊倒计时
+    function startGroupBanCountdown() {
+        // 重置倒计时
+        groupBanCountdownTime = 5;
+        document.getElementById('ban-group-countdown-time').textContent = groupBanCountdownTime;
+        document.getElementById('ban-group-countdown').style.display = 'block';
+        
+        const confirmBtn = document.getElementById('confirm-ban-group-btn');
+        confirmBtn.disabled = true;
+        confirmBtn.style.cursor = 'not-allowed';
+        confirmBtn.style.opacity = '0.6';
+        
+        // 清除之前的倒计时
+        if (groupBanCountdownInterval) {
+            clearInterval(groupBanCountdownInterval);
+        }
+        
+        // 开始新的倒计时
+        groupBanCountdownInterval = setInterval(() => {
+            groupBanCountdownTime--;
+            document.getElementById('ban-group-countdown-time').textContent = groupBanCountdownTime;
+            
+            if (groupBanCountdownTime <= 0) {
+                clearInterval(groupBanCountdownInterval);
+                groupBanCountdownInterval = null;
+                
+                confirmBtn.disabled = false;
+                confirmBtn.style.cursor = 'pointer';
+                confirmBtn.style.opacity = '1';
+            }
+        }, 1000);
+    }
+    
+    // 处理确认封禁群聊
+    async function handleConfirmBanGroup() {
+        const reason = document.getElementById('ban-group-reason').value.trim();
+        const isPermanent = document.getElementById('ban-group-permanent').checked;
+        const password = document.getElementById('admin-password-ban-group').value;
+        
+        // 验证理由
+        if (!reason) {
+            document.getElementById('ban-group-reason-error').textContent = '请输入封禁理由';
+            document.getElementById('ban-group-reason-error').style.display = 'block';
+            return;
+        }
+        
+        // 计算封禁时长
+        let banDuration = 0;
+        if (!isPermanent) {
+            const years = parseInt(document.getElementById('ban-group-years').value) || 0;
+            const months = parseInt(document.getElementById('ban-group-months').value) || 0;
+            const days = parseInt(document.getElementById('ban-group-days').value) || 0;
+            const hours = parseInt(document.getElementById('ban-group-hours').value) || 0;
+            const minutes = parseInt(document.getElementById('ban-group-minutes').value) || 0;
+            
+            // 转换为秒
+            banDuration = (years * 365 * 24 * 60 * 60) + 
+                         (months * 30 * 24 * 60 * 60) + 
+                         (days * 24 * 60 * 60) + 
+                         (hours * 60 * 60) + 
+                         (minutes * 60);
+            
+            if (banDuration <= 0) {
+                document.getElementById('ban-group-duration-error').textContent = '请输入有效的封禁时长或选择永久封禁';
+                document.getElementById('ban-group-duration-error').style.display = 'block';
+                return;
+            }
+        }
+        
+        // 验证密码
+        const isValidPassword = await validatePassword(password);
+        if (!isValidPassword) {
+            document.getElementById('admin-password-error-ban-group').textContent = '密码错误，请重试';
+            document.getElementById('admin-password-error-ban-group').style.display = 'block';
+            return;
+        }
+        
+        // 创建表单
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.style.display = 'none';
+        
+        // 添加表单字段
+        form.appendChild(createHiddenInput('action', 'ban_group'));
+        form.appendChild(createHiddenInput('group_id', currentGroupId));
+        form.appendChild(createHiddenInput('ban_reason', reason));
+        form.appendChild(createHiddenInput('ban_duration', isPermanent ? 0 : banDuration));
+        form.appendChild(createHiddenInput('password', password));
+        
+        // 添加到页面并提交
+        document.body.appendChild(form);
+        form.submit();
+    }
+    
+    // 显示解除群聊封禁弹窗
+    function showLiftGroupBanModal(groupId) {
+        currentGroupId = groupId;
+        
+        // 重置表单
+        document.getElementById('admin-password-lift-group-ban').value = '';
+        document.getElementById('admin-password-error-lift-group-ban').style.display = 'none';
+        
+        // 显示弹窗
+        document.getElementById('lift-group-ban-modal').style.display = 'flex';
+        
+        // 添加事件监听器
+        document.getElementById('cancel-lift-group-ban-btn').addEventListener('click', closeLiftGroupBanModal);
+        document.getElementById('confirm-lift-group-ban-btn').addEventListener('click', handleConfirmLiftGroupBan);
+        document.getElementById('admin-password-lift-group-ban').addEventListener('input', handleLiftGroupBanPasswordInput);
+    }
+    
+    // 关闭解除群聊封禁弹窗
+    function closeLiftGroupBanModal() {
+        document.getElementById('lift-group-ban-modal').style.display = 'none';
+        
+        // 移除事件监听器
+        document.getElementById('cancel-lift-group-ban-btn').removeEventListener('click', closeLiftGroupBanModal);
+        document.getElementById('confirm-lift-group-ban-btn').removeEventListener('click', handleConfirmLiftGroupBan);
+        document.getElementById('admin-password-lift-group-ban').removeEventListener('input', handleLiftGroupBanPasswordInput);
+    }
+    
+    // 处理解除群聊封禁密码输入
+    function handleLiftGroupBanPasswordInput() {
+        document.getElementById('admin-password-error-lift-group-ban').style.display = 'none';
+    }
+    
+    // 处理确认解除群聊封禁
+    async function handleConfirmLiftGroupBan() {
+        const password = document.getElementById('admin-password-lift-group-ban').value;
+        
+        // 验证密码
+        const isValidPassword = await validatePassword(password);
+        if (!isValidPassword) {
+            document.getElementById('admin-password-error-lift-group-ban').textContent = '密码错误，请重试';
+            document.getElementById('admin-password-error-lift-group-ban').style.display = 'block';
+            return;
+        }
+        
+        // 创建表单
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.style.display = 'none';
+        
+        // 添加表单字段
+        form.appendChild(createHiddenInput('action', 'lift_group_ban'));
+        form.appendChild(createHiddenInput('group_id', currentGroupId));
+        form.appendChild(createHiddenInput('password', password));
+        
+        // 添加到页面并提交
+        document.body.appendChild(form);
+        form.submit();
+    }
+    
+    // 创建隐藏输入字段辅助函数
+    function createHiddenInput(name, value) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        return input;
+    }
         
         // 显示操作结果弹窗
         function showResultModal(success, title, message) {
@@ -1719,6 +2274,64 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             
             // 显示弹窗
             modal.style.display = 'flex';
+        }
+        
+        // 关闭封禁记录弹窗
+        function closeBanRecordModal() {
+            document.getElementById('ban-record-modal').style.display = 'none';
+        }
+        
+        // 显示封禁记录
+        function showBanRecordModal(type, id, name) {
+            const modal = document.getElementById('ban-record-modal');
+            const titleEl = document.getElementById('ban-record-title');
+            const contentEl = document.getElementById('ban-record-content');
+            
+            // 设置标题
+            titleEl.textContent = `${type === 'user' ? '用户' : '群聊'} "${name}" 的封禁记录`;
+            
+            // 显示加载状态
+            contentEl.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">加载中...</div>';
+            
+            // 显示弹窗
+            modal.style.display = 'flex';
+            
+            // 发送请求获取封禁记录
+            fetch(`get_ban_records.php?type=${type}&id=${id}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        if (data.records.length === 0) {
+                            contentEl.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">暂无封禁记录</p>';
+                        } else {
+                            let html = '<div style="display: flex; flex-direction: column; gap: 15px;">';
+                            data.records.forEach(record => {
+                                html += `
+                                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
+                                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                            <div>
+                                                <h4 style="margin: 0 0 8px 0; color: #333; font-size: 15px;">${record.action === 'ban' ? '封禁' : record.action === 'lift' ? '解除封禁' : '自动解除'}</h4>
+                                                <p style="margin: 0 0 8px 0; color: #666; font-size: 13px;">原因: ${record.reason || '无'}</p>
+                                                <p style="margin: 0 0 8px 0; color: #666; font-size: 13px;">操作人: ${record.banned_by || '系统'}</p>
+                                                <p style="margin: 0 0 4px 0; color: #666; font-size: 13px;">封禁时间: ${record.ban_start}</p>
+                                                ${record.ban_end ? `<p style="margin: 0; color: #666; font-size: 13px;">截止时间: ${record.ban_end}</p>` : ''}
+                                            </div>
+                                            <div style="font-size: 12px; color: #999; margin-top: 5px;">${record.action_time}</div>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            html += '</div>';
+                            contentEl.innerHTML = html;
+                        }
+                    } else {
+                        contentEl.innerHTML = `<p style="text-align: center; color: #ff4757; padding: 20px;">${data.message}</p>`;
+                    }
+                })
+                .catch(error => {
+                    console.error('获取封禁记录失败:', error);
+                    contentEl.innerHTML = '<p style="text-align: center; color: #ff4757; padding: 20px;">获取封禁记录失败，请稍后重试</p>';
+                });
         }
         
         // 关闭操作结果弹窗
@@ -1739,10 +2352,16 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             
             // 重置输入字段和错误提示
             document.getElementById('ban-reason').value = '';
-            document.getElementById('ban-duration').value = '';
+            document.getElementById('ban-years').value = '0';
+            document.getElementById('ban-months').value = '0';
+            document.getElementById('ban-days').value = '0';
+            document.getElementById('ban-hours').value = '0';
+            document.getElementById('ban-minutes').value = '0';
+            document.getElementById('ban-permanent').checked = false;
             document.getElementById('admin-password-ban').value = '';
             document.getElementById('ban-reason-error').style.display = 'none';
             document.getElementById('ban-duration-error').style.display = 'none';
+            document.getElementById('ban-permanent-warning').style.display = 'none';
             document.getElementById('admin-password-error-ban').style.display = 'none';
             
             // 显示弹窗
@@ -1751,6 +2370,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             // 添加事件监听器
             document.getElementById('cancel-ban-btn').addEventListener('click', closeBanUserModal);
             document.getElementById('confirm-ban-btn').addEventListener('click', handleBanUser);
+            document.getElementById('ban-permanent').addEventListener('change', handleBanPermanentChange);
         }
         
         // 关闭封禁用户弹窗
@@ -1760,12 +2380,31 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             // 移除事件监听器
             document.getElementById('cancel-ban-btn').removeEventListener('click', closeBanUserModal);
             document.getElementById('confirm-ban-btn').removeEventListener('click', handleBanUser);
+            document.getElementById('ban-permanent').removeEventListener('change', handleBanPermanentChange);
+        }
+        
+        // 处理永久封禁复选框变化
+        function handleBanPermanentChange() {
+            const isPermanent = document.getElementById('ban-permanent').checked;
+            const durationInputs = ['ban-years', 'ban-months', 'ban-days', 'ban-hours', 'ban-minutes'];
+            const warningEl = document.getElementById('ban-permanent-warning');
+            
+            durationInputs.forEach(id => {
+                const input = document.getElementById(id);
+                input.disabled = isPermanent;
+                if (isPermanent) {
+                    input.value = '0';
+                }
+            });
+            
+            // 显示或隐藏永久封禁警告
+            warningEl.style.display = isPermanent ? 'block' : 'none';
         }
         
         // 处理封禁用户
         async function handleBanUser() {
             const reason = document.getElementById('ban-reason').value.trim();
-            const duration = parseInt(document.getElementById('ban-duration').value);
+            const isPermanent = document.getElementById('ban-permanent').checked;
             const adminPassword = document.getElementById('admin-password-ban').value;
             
             // 验证输入
@@ -1775,10 +2414,27 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 return;
             }
             
-            if (!duration || duration <= 0) {
-                document.getElementById('ban-duration-error').textContent = '请输入有效的封禁时长';
-                document.getElementById('ban-duration-error').style.display = 'block';
-                return;
+            // 计算封禁时长
+            let banDuration = 0;
+            if (!isPermanent) {
+                const years = parseInt(document.getElementById('ban-years').value) || 0;
+                const months = parseInt(document.getElementById('ban-months').value) || 0;
+                const days = parseInt(document.getElementById('ban-days').value) || 0;
+                const hours = parseInt(document.getElementById('ban-hours').value) || 0;
+                const minutes = parseInt(document.getElementById('ban-minutes').value) || 0;
+                
+                // 转换为秒
+                banDuration = (years * 365 * 24 * 60 * 60) + 
+                             (months * 30 * 24 * 60 * 60) + 
+                             (days * 24 * 60 * 60) + 
+                             (hours * 60 * 60) + 
+                             (minutes * 60);
+                
+                if (banDuration <= 0) {
+                    document.getElementById('ban-duration-error').textContent = '请输入有效的封禁时长或选择永久封禁';
+                    document.getElementById('ban-duration-error').style.display = 'block';
+                    return;
+                }
             }
             
             if (!adminPassword) {
@@ -1791,7 +2447,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             const isValid = await validatePassword(adminPassword);
             if (isValid) {
                 // 密码正确，执行封禁操作
-                executeBanUser(reason, duration, adminPassword);
+                executeBanUser(reason, isPermanent ? 0 : banDuration, adminPassword);
             } else {
                 // 密码错误，显示错误提示
                 document.getElementById('admin-password-error-ban').style.display = 'block';

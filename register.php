@@ -192,5 +192,154 @@
             已有账户？ <a href="login.php">立即登录</a>
         </div>
     </div>
+    
+    <!-- 邮箱验证弹窗 -->
+    <div id="email-verify-modal" style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    ">
+        <div style="
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        ">
+            <div id="verify-icon" style="
+                font-size: 64px;
+                margin-bottom: 20px;
+            ">⏳</div>
+            <h3 id="verify-title" style="
+                margin-bottom: 15px;
+                color: #333;
+                font-size: 18px;
+            ">正在验证邮箱</h3>
+            <p id="verify-message" style="
+                margin-bottom: 25px;
+                color: #666;
+                font-size: 14px;
+                line-height: 1.5;
+            ">正在验证邮箱，请稍后...</p>
+            <button id="verify-close-btn" style="
+                padding: 10px 25px;
+                background: #667eea;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 500;
+                font-size: 14px;
+                transition: background-color 0.2s;
+            ">确定</button>
+        </div>
+    </div>
+    
+    <script>
+        // 初始化邮箱验证状态
+        let emailVerified = false;
+        let isVerifying = false;
+        
+        // 获取元素
+        const emailInput = document.getElementById('email');
+        const form = document.querySelector('form');
+        const modal = document.getElementById('email-verify-modal');
+        const verifyIcon = document.getElementById('verify-icon');
+        const verifyTitle = document.getElementById('verify-title');
+        const verifyMessage = document.getElementById('verify-message');
+        const verifyCloseBtn = document.getElementById('verify-close-btn');
+        
+        // 关闭弹窗
+        verifyCloseBtn.addEventListener('click', () => {
+            modal.style.display = 'none';
+            if (!emailVerified) {
+                emailInput.focus();
+            }
+        });
+        
+        // 显示验证弹窗
+        function showVerifyModal() {
+            modal.style.display = 'flex';
+            verifyIcon.textContent = '⏳';
+            verifyTitle.textContent = '正在验证邮箱';
+            verifyMessage.textContent = '正在验证邮箱，请稍后...';
+            verifyCloseBtn.style.display = 'none';
+        }
+        
+        // 显示验证结果弹窗
+        function showVerifyResult(isSuccess, message) {
+            modal.style.display = 'flex';
+            verifyIcon.textContent = isSuccess ? '✅' : '❌';
+            verifyTitle.textContent = isSuccess ? '验证成功' : '验证失败';
+            verifyMessage.textContent = message;
+            verifyCloseBtn.style.display = 'block';
+            emailVerified = isSuccess;
+        }
+        
+        // 邮箱验证函数
+        async function verifyEmail(email) {
+            // 检查是否为Gmail
+            if (/^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(email)) {
+                // Gmail直接验证成功
+                showVerifyResult(true, 'Gmail邮箱，允许继续操作');
+                return true;
+            }
+            
+            showVerifyModal();
+            isVerifying = true;
+            
+            try {
+                // 发送验证请求
+                const response = await fetch('verify_email.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `email=${encodeURIComponent(email)}`
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showVerifyResult(true, '邮箱存在，允许继续操作');
+                    return true;
+                } else {
+                    showVerifyResult(false, '邮箱不存在，请重新填写');
+                    return false;
+                }
+            } catch (error) {
+                console.error('邮箱验证失败:', error);
+                showVerifyResult(false, '邮箱验证失败，请稍后重试');
+                return false;
+            } finally {
+                isVerifying = false;
+            }
+        }
+        
+        // 监听邮箱输入框的blur事件
+        emailInput.addEventListener('blur', async () => {
+            const email = emailInput.value.trim();
+            if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                await verifyEmail(email);
+            }
+        });
+        
+        // 阻止表单提交，除非邮箱已验证
+        form.addEventListener('submit', (e) => {
+            if (!emailVerified && isVerifying) {
+                e.preventDefault();
+                alert('正在验证邮箱，请稍后...');
+            }
+        });
+    </script>
 </body>
 </html>

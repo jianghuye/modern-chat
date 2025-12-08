@@ -3,7 +3,7 @@
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'chat');
 define('DB_USER', 'root');
-define('DB_PASS', 'your_password');
+define('DB_PASS', 'cf211396ab9363ad');
 
 // 应用配置
 define('APP_NAME', 'Modern Chat');
@@ -22,9 +22,6 @@ define('ALLOWED_FILE_TYPES', [
     'video/mp4', 'video/webm', 'video/ogg',
     'audio/mpeg', 'audio/wav', 'audio/ogg'
 ]);
-
-// 会话配置
-define('SESSION_TIMEOUT', 3600); // 1小时
 
 // 安全配置
 define('HASH_ALGO', PASSWORD_DEFAULT);
@@ -88,3 +85,6 @@ function getConfig($key = null, $default = null) {
 function getUserNameMaxLength() {
     return getConfig('user_name_max', 12);
 }
+
+// 会话配置，从config.json读取，默认1小时
+define('SESSION_TIMEOUT', getConfig('Session_Duration', 1) * 3600); // 转换为秒

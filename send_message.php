@@ -71,63 +71,87 @@ require_once 'Group.php';
         error_log("File Upload Result: " . print_r($file_result, true));
     }
 
-    // 检查消息内容是否包含HTML标签
-        function containsHtmlTags($text) {
-            return preg_match('/<[^>]*>/', $text);
+    // 检查消息内容是否包含HTML标签（使用更严格的正则表达式）
+    function containsHtmlTags($text) {
+        // 检查各种形式的HTML标签，包括大小写和空格
+        return preg_match('/<\s*[a-zA-Z][^>]*>/i', $text);
+    }
+    
+    // 发送消息
+    if ($chat_type === 'friend') {
+        // 好友消息
+        if ($file_result && $file_result['success']) {
+            // 发送文件消息
+            $result = $message->sendFileMessage(
+                $user_id,
+                $friend_id,
+                $file_result['file_path'],
+                $file_result['file_name'],
+                $file_result['file_size']
+            );
+            error_log("Send File Message Result: " . print_r($result, true));
+        } else if ($message_text) {
+            // 检查消息是否包含HTML标签
+            if (containsHtmlTags($message_text)) {
+                echo json_encode(['success' => false, 'message' => '消息中不能包含HTML标签']);
+                exit;
+            }
+            // 发送文本消息
+            $result = $message->sendTextMessage($user_id, $friend_id, $message_text);
+            error_log("Send Text Message Result: " . print_r($result, true));
+        } else {
+            echo json_encode(['success' => false, 'message' => '请输入消息内容或选择文件']);
+            exit;
+        }
+    } else {
+        // 群聊消息
+        
+        // 检查群聊是否被封禁
+        $stmt = $conn->prepare("SELECT reason, ban_end FROM group_bans WHERE group_id = ? AND status = 'active'");
+        $stmt->execute([$selected_id]);
+        $ban_info = $stmt->fetch();
+        
+        if ($ban_info) {
+            // 检查封禁是否已过期
+            if ($ban_info['ban_end'] && strtotime($ban_info['ban_end']) < time()) {
+                // 更新封禁状态为过期
+                $stmt = $conn->prepare("UPDATE group_bans SET status = 'expired' WHERE group_id = ? AND status = 'active'");
+                $stmt->execute([$selected_id]);
+                
+                // 插入过期日志
+                $stmt = $conn->prepare("INSERT INTO group_ban_logs (ban_id, action, action_by) VALUES ((SELECT id FROM group_bans WHERE group_id = ? ORDER BY id DESC LIMIT 1), 'expire', NULL)");
+                $stmt->execute([$selected_id]);
+            } else {
+                // 群聊被封禁，返回错误信息
+                echo json_encode(['success' => false, 'message' => '群聊被封禁，您暂时无法查看群聊成员和使用群聊功能']);
+                exit;
+            }
         }
         
-        // 发送消息
-        if ($chat_type === 'friend') {
-            // 好友消息
-            if ($file_result && $file_result['success']) {
-                // 发送文件消息
-                $result = $message->sendFileMessage(
-                    $user_id,
-                    $friend_id,
-                    $file_result['file_path'],
-                    $file_result['file_name'],
-                    $file_result['file_size']
-                );
-                error_log("Send File Message Result: " . print_r($result, true));
-            } else if ($message_text) {
-                // 检查消息是否包含HTML标签
-                if (containsHtmlTags($message_text)) {
-                    echo json_encode(['success' => false, 'message' => '消息中不能包含HTML标签']);
-                    exit;
-                }
-                // 发送文本消息
-                $result = $message->sendTextMessage($user_id, $friend_id, $message_text);
-                error_log("Send Text Message Result: " . print_r($result, true));
-            } else {
-                echo json_encode(['success' => false, 'message' => '请输入消息内容或选择文件']);
+        if ($file_result && $file_result['success']) {
+            // 发送文件消息
+            $file_info = [
+                'file_path' => $file_result['file_path'],
+                'file_name' => $file_result['file_name'],
+                'file_size' => $file_result['file_size'],
+                'file_type' => $file_result['file_type']
+            ];
+            $result = $group->sendGroupMessage($selected_id, $user_id, '', $file_info);
+            error_log("Send Group File Message Result: " . print_r($result, true));
+        } else if ($message_text) {
+            // 检查消息是否包含HTML标签
+            if (containsHtmlTags($message_text)) {
+                echo json_encode(['success' => false, 'message' => '消息中不能包含HTML标签']);
                 exit;
             }
+            // 发送文本消息
+            $result = $group->sendGroupMessage($selected_id, $user_id, $message_text);
+            error_log("Send Group Text Message Result: " . print_r($result, true));
         } else {
-            // 群聊消息
-            if ($file_result && $file_result['success']) {
-                // 发送文件消息
-                $file_info = [
-                    'file_path' => $file_result['file_path'],
-                    'file_name' => $file_result['file_name'],
-                    'file_size' => $file_result['file_size'],
-                    'file_type' => $file_result['file_type']
-                ];
-                $result = $group->sendGroupMessage($selected_id, $user_id, '', $file_info);
-                error_log("Send Group File Message Result: " . print_r($result, true));
-            } else if ($message_text) {
-                // 检查消息是否包含HTML标签
-                if (containsHtmlTags($message_text)) {
-                    echo json_encode(['success' => false, 'message' => '消息中不能包含HTML标签']);
-                    exit;
-                }
-                // 发送文本消息
-                $result = $group->sendGroupMessage($selected_id, $user_id, $message_text);
-                error_log("Send Group Text Message Result: " . print_r($result, true));
-            } else {
-                echo json_encode(['success' => false, 'message' => '请输入消息内容或选择文件']);
-                exit;
-            }
+            echo json_encode(['success' => false, 'message' => '请输入消息内容或选择文件']);
+            exit;
         }
+    }
 
     if ($result['success']) {
         // 获取完整的消息信息

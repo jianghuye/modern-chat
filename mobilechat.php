@@ -70,8 +70,14 @@ $current_user = $user->getUserById($user_id);
 // 获取好友列表
 $friends = $friend->getFriends($user_id);
 
+// 获取好友申请列表
+$friend_requests = $friend->getPendingRequests($user_id);
+
 // 获取群聊列表
 $groups = $group->getUserGroups($user_id);
+
+// 获取未读好友申请数量
+$unread_requests_count = count($friend_requests);
 
 // 获取未读消息计数
 $unread_counts = [];
@@ -851,6 +857,12 @@ $user_ip = getUserIP();
         <div class="menu-items">
             <a href="edit_profile.php" class="menu-item">编辑资料</a>
             <button class="menu-item" onclick="showAddFriendModal()">添加好友</button>
+            <button class="menu-item" onclick="showFriendRequests()">
+                好友申请
+                <?php if ($unread_requests_count > 0): ?>
+                    <span style="background: #ff4757; color: white; border-radius: 50%; padding: 2px 6px; font-size: 10px; margin-left: 5px;"><?php echo $unread_requests_count; ?></span>
+                <?php endif; ?>
+            </button>
             <button class="menu-item" onclick="showFeedbackModal()">反馈问题</button>
             <button class="menu-item" onclick="showScanLoginModal()">扫码登录PC端</button>
             <a href="logout.php" class="menu-item menu-item-danger">退出登录</a>
@@ -957,6 +969,29 @@ $user_ip = getUserIP();
                             <?php } ?>
                         </p>
                     </div>
+                    <button class="chat-menu-btn" onclick="toggleChatMenu()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666; margin-left: auto; padding: 0 10px;">
+                        ⋮
+                    </button>
+                </div>
+                
+                <!-- 聊天菜单 -->
+                <div id="chat-menu" style="display: none; position: fixed; top: 80px; right: 20px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); z-index: 1000; min-width: 150px;">
+                    <div style="padding: 10px;">
+                        <?php if ($selected_friend) { ?>
+                            <!-- 好友聊天菜单 -->
+                            <button onclick="deleteFriend(<?php echo $selected_friend['id']; ?>)" style="display: block; width: 100%; padding: 12px 15px; background: #f5f5f5; color: #d32f2f; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; margin-bottom: 10px; text-align: left; transition: background-color 0.2s;">
+                                删除好友
+                            </button>
+                        <?php } elseif ($selected_group) { ?>
+                            <!-- 群聊聊天菜单 -->
+                            <button onclick="showGroupMembers(<?php echo $selected_group['id']; ?>)" style="display: block; width: 100%; padding: 12px 15px; background: #f5f5f5; color: #333; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; margin-bottom: 10px; text-align: left; transition: background-color 0.2s;">
+                                查看成员
+                            </button>
+                            <button onclick="leaveGroup(<?php echo $selected_group['id']; ?>)" style="display: block; width: 100%; padding: 12px 15px; background: #f5f5f5; color: #d32f2f; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; text-align: left; transition: background-color 0.2s;">
+                                退出群聊
+                            </button>
+                        <?php } ?>
+                    </div>
                 </div>
                 
                 <div class="messages-container" id="messages-container">
@@ -965,6 +1000,366 @@ $user_ip = getUserIP();
                 
                 <!-- 初始聊天记录数据 -->
                 <script>
+    // 检查群聊是否被封禁
+    let isGroupBanned = false;
+    
+    function checkGroupBanStatus(groupId) {
+        return fetch(`check_group_ban.php?group_id=${groupId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.banned) {
+                    isGroupBanned = true;
+                    showGroupBanModal(data.group_name, data.reason, data.ban_end);
+                    disableGroupOperations();
+                } else {
+                    isGroupBanned = false;
+                }
+                return data.banned;
+            })
+            .catch(error => {
+                console.error('检查群聊封禁状态失败:', error);
+                return false;
+            });
+    }
+    
+    // 显示群聊封禁弹窗
+    function showGroupBanModal(groupName, reason, banEnd) {
+        // 创建封禁弹窗
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const modalContent = document.createElement('div');
+        modalContent.style.cssText = `
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        `;
+        
+        // 封禁图标
+        const banIcon = document.createElement('div');
+        banIcon.style.cssText = `
+            font-size: 64px;
+            margin-bottom: 20px;
+            color: #ff4757;
+        `;
+        banIcon.textContent = '🚫';
+        
+        // 标题
+        const title = document.createElement('h3');
+        title.style.cssText = `
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 18px;
+        `;
+        title.textContent = '群聊已被封禁';
+        
+        // 内容
+        const content = document.createElement('div');
+        content.style.cssText = `
+            margin-bottom: 25px;
+            color: #666;
+            font-size: 14px;
+        `;
+        
+        content.innerHTML = `
+            <p>此群 <strong>${groupName}</strong> 已被封禁</p>
+            <p style="margin: 10px 0;">原因：${reason}</p>
+            <p>预计解封时长：${banEnd ? new Date(banEnd).toLocaleString() : '永久'}</p>
+            <p style="color: #ff4757; margin-top: 15px;">群聊被封禁期间，无法使用任何群聊功能</p>
+        `;
+        
+        // 关闭按钮
+        const closeBtn = document.createElement('button');
+        closeBtn.style.cssText = `
+            padding: 12px 30px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        `;
+        closeBtn.textContent = '确定';
+        
+        closeBtn.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            // 返回聊天列表
+            window.location.href = 'mobilechat.php';
+        });
+        
+        // 组装弹窗
+        modalContent.appendChild(banIcon);
+        modalContent.appendChild(title);
+        modalContent.appendChild(content);
+        modalContent.appendChild(closeBtn);
+        modal.appendChild(modalContent);
+        
+        // 添加到页面
+        document.body.appendChild(modal);
+    }
+    
+    // 禁用所有群聊操作
+    function disableGroupOperations() {
+        // 禁用输入区域
+        const inputArea = document.querySelector('.input-area');
+        if (inputArea) {
+            inputArea.style.display = 'none';
+        }
+        
+        // 添加封禁提示
+        const messagesContainer = document.getElementById('messages-container');
+        if (messagesContainer) {
+            const banNotice = document.createElement('div');
+            banNotice.style.cssText = `
+                background: #ffebee;
+                color: #d32f2f;
+                padding: 12px 20px;
+                border-radius: 8px;
+                margin-bottom: 15px;
+                text-align: center;
+                font-size: 14px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            `;
+            banNotice.textContent = '群聊被封禁，您暂时无法查看群聊成员和使用群聊功能';
+            messagesContainer.insertBefore(banNotice, messagesContainer.firstChild);
+        }
+    }
+    
+    // 显示结果模态框
+    function showResultModal(title, message, type = 'info') {
+        // 移除已存在的模态框
+        const existingModal = document.getElementById('result-modal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // 创建模态框
+        const modal = document.createElement('div');
+        modal.id = 'result-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const modalContent = document.createElement('div');
+        modalContent.style.cssText = `
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        `;
+        
+        // 标题
+        const modalTitle = document.createElement('h3');
+        modalTitle.style.cssText = `
+            margin-bottom: 15px;
+            color: ${type === 'error' ? '#d32f2f' : '#333'};
+            font-size: 18px;
+        `;
+        modalTitle.textContent = title;
+        
+        // 内容
+        const modalMessage = document.createElement('p');
+        modalMessage.style.cssText = `
+            margin-bottom: 20px;
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+        `;
+        modalMessage.textContent = message;
+        
+        // 关闭按钮
+        const closeBtn = document.createElement('button');
+        closeBtn.style.cssText = `
+            padding: 10px 25px;
+            background: ${type === 'error' ? '#d32f2f' : '#667eea'};
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        `;
+        closeBtn.textContent = '确定';
+        
+        closeBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        // 组装模态框
+        modalContent.appendChild(modalTitle);
+        modalContent.appendChild(modalMessage);
+        modalContent.appendChild(closeBtn);
+        modal.appendChild(modalContent);
+        
+        // 添加到页面
+        document.body.appendChild(modal);
+        
+        // 3秒后自动关闭
+        setTimeout(() => {
+            if (modal.parentNode) {
+                modal.remove();
+            }
+        }, 3000);
+    }
+    
+    // 显示确认模态框
+    function showConfirmModal(title, message, onConfirm, onCancel = null) {
+        // 移除已存在的模态框
+        const existingModal = document.getElementById('confirm-modal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // 创建模态框
+        const modal = document.createElement('div');
+        modal.id = 'confirm-modal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        const modalContent = document.createElement('div');
+        modalContent.style.cssText = `
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        `;
+        
+        // 标题
+        const modalTitle = document.createElement('h3');
+        modalTitle.style.cssText = `
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 18px;
+        `;
+        modalTitle.textContent = title;
+        
+        // 内容
+        const modalMessage = document.createElement('p');
+        modalMessage.style.cssText = `
+            margin-bottom: 25px;
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        `;
+        modalMessage.textContent = message;
+        
+        // 按钮容器
+        const buttonsContainer = document.createElement('div');
+        buttonsContainer.style.cssText = `
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        `;
+        
+        // 取消按钮
+        const cancelBtn = document.createElement('button');
+        cancelBtn.style.cssText = `
+            flex: 1;
+            padding: 10px 25px;
+            background: #f5f5f5;
+            color: #333;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        `;
+        cancelBtn.textContent = '取消';
+        
+        cancelBtn.addEventListener('click', () => {
+            modal.remove();
+            if (onCancel) {
+                onCancel();
+            }
+        });
+        
+        // 确认按钮
+        const confirmBtn = document.createElement('button');
+        confirmBtn.style.cssText = `
+            flex: 1;
+            padding: 10px 25px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        `;
+        confirmBtn.textContent = '确定';
+        
+        confirmBtn.addEventListener('click', () => {
+            modal.remove();
+            onConfirm();
+        });
+        
+        // 组装模态框
+        buttonsContainer.appendChild(cancelBtn);
+        buttonsContainer.appendChild(confirmBtn);
+        modalContent.appendChild(modalTitle);
+        modalContent.appendChild(modalMessage);
+        modalContent.appendChild(buttonsContainer);
+        modal.appendChild(modalContent);
+        
+        // 添加到页面
+        document.body.appendChild(modal);
+    }
+    
+    // 页面加载时检查当前群聊是否被封禁
+    document.addEventListener('DOMContentLoaded', function() {
+        const chatType = document.querySelector('input[name="chat_type"]')?.value;
+        const groupId = document.querySelector('input[name="id"]')?.value;
+        
+        if (chatType === 'group' && groupId) {
+            checkGroupBanStatus(groupId);
+        }
+    });
                     // 初始聊天记录数据
                     const initialChatHistory = <?php echo json_encode($chat_history); ?>;
                     
@@ -1008,12 +1403,24 @@ $user_ip = getUserIP();
                         });
                     }
                     
+                    // 加载群聊禁言状态
+                    async function loadChatMuteStatus() {
+                        const chatType = document.querySelector('input[name="chat_type"]')?.value;
+                        const chatId = document.querySelector('input[name="id"]')?.value;
+                        
+
+                    }
+                    
+
+                    
                     // 页面加载完成后加载初始聊天记录和标记消息为已读
                     document.addEventListener('DOMContentLoaded', () => {
                         loadInitialChatHistory();
                         markMessagesAsRead();
                     });
                 </script>
+                
+
                 
                 <div class="input-area">
                     <form id="message-form" enctype="multipart/form-data">
@@ -1108,6 +1515,40 @@ $user_ip = getUserIP();
         </div>
     </div>
     
+    <!-- 好友申请列表模态框 -->
+    <div class="modal" id="friend-requests-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 2000; flex-direction: column; align-items: center; justify-content: center;">
+        <div style="background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; max-height: 80vh; overflow: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="color: #333;">好友申请</h3>
+                <button type="button" onclick="closeFriendRequestsModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
+            </div>
+            <div id="friend-requests-list">
+                <?php if (empty($friend_requests)): ?>
+                    <p style="text-align: center; color: #999; margin: 40px 0;">暂无好友申请</p>
+                <?php else: ?>
+                    <?php foreach ($friend_requests as $request): ?>
+                        <div style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <div style="width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 18px;">
+                                    <?php echo substr($request['username'], 0, 2); ?>
+                                </div>
+                                <div style="flex: 1;">
+                                    <h4 style="margin: 0 0 5px; color: #333;"><?php echo $request['username']; ?></h4>
+                                    <p style="margin: 0; color: #666; font-size: 14px;"><?php echo $request['email']; ?></p>
+                                    <p style="margin: 5px 0 15px; color: #999; font-size: 12px;">申请时间: <?php echo $request['created_at']; ?></p>
+                                    <div style="display: flex; gap: 10px;">
+                                        <button onclick="acceptFriendRequest(<?php echo $request['id']; ?>)" style="flex: 1; padding: 8px 12px; background: #4caf50; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">同意</button>
+                                        <button onclick="rejectFriendRequest(<?php echo $request['id']; ?>)" style="flex: 1; padding: 8px 12px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">拒绝</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
     <!-- 反馈模态框 -->
     <div class="modal" id="feedback-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 2000; flex-direction: column; align-items: center; justify-content: center;">
         <div style="background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px;">
@@ -1152,6 +1593,33 @@ $user_ip = getUserIP();
             modal.style.display = 'none';
             // 重置表单
             document.getElementById('add-friend-form').reset();
+        }
+        
+        // 显示好友申请列表
+        function showFriendRequests() {
+            const modal = document.getElementById('friend-requests-modal');
+            modal.style.display = 'flex';
+            toggleMenu();
+        }
+        
+        // 关闭好友申请列表
+        function closeFriendRequestsModal() {
+            const modal = document.getElementById('friend-requests-modal');
+            modal.style.display = 'none';
+        }
+        
+        // 接受好友申请
+        function acceptFriendRequest(requestId) {
+            if (confirm('确定要接受这个好友申请吗？')) {
+                window.location.href = `accept_request.php?request_id=${requestId}`;
+            }
+        }
+        
+        // 拒绝好友申请
+        function rejectFriendRequest(requestId) {
+            if (confirm('确定要拒绝这个好友申请吗？')) {
+                window.location.href = `reject_request.php?request_id=${requestId}`;
+            }
         }
         
         // 处理添加好友表单提交
@@ -2631,6 +3099,423 @@ $user_ip = getUserIP();
             // 每30秒检查一次封禁状态
             setInterval(checkBanStatus, 30000);
         });
+        
+        // 实时更新消息
+        let lastMessageId = <?php echo end($chat_history)['id'] ?? 0; ?>;
+        
+        function fetchNewMessages() {
+            // 动态获取当前聊天类型和选中的ID
+            const chatType = document.querySelector('input[name="chat_type"]')?.value;
+            const selectedId = document.querySelector('input[name="id"]')?.value;
+            
+            if (chatType && selectedId) {
+                let url = '';
+                
+                if (chatType === 'friend') {
+                    url = `get_new_messages.php?friend_id=${selectedId}&last_message_id=${lastMessageId}`;
+                } else {
+                    url = `get_new_group_messages.php?group_id=${selectedId}&last_message_id=${lastMessageId}`;
+                }
+                
+                fetch(url)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.messages.length > 0) {
+                            const messagesContainer = document.getElementById('messages-container');
+                            let hasNewMessages = false;
+                            
+                            data.messages.forEach(msg => {
+                                // 添加所有新消息，包括自己发送的和其他成员发送的
+                                const isSent = msg.sender_id == <?php echo $user_id; ?>;
+                                const newMessage = createMessage(msg, isSent);
+                                messagesContainer.appendChild(newMessage);
+                                hasNewMessages = true;
+                                // 更新lastMessageId为最新消息ID
+                                if (msg.id > lastMessageId) {
+                                    lastMessageId = msg.id;
+                                }
+                            });
+                            
+                            if (hasNewMessages) {
+                                // 滚动到底部
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            }
+                        }
+                    })
+                    .catch(error => console.error('获取新消息失败:', error));
+                
+                // 定期检查群聊禁言状态
+                if (chatType === 'group') {
+                    loadChatMuteStatus();
+                }
+            }
+        }
+        
+        // 每3秒获取一次新消息
+        setInterval(fetchNewMessages, 3000);
+        
+        // 更新群聊禁言状态
+        async function updateChatMuteStatus(isMuted) {
+            const muteNotice = document.getElementById('group-mute-notice');
+            const inputContainer = document.querySelector('.input-area');
+            
+            if (isMuted) {
+                // 显示禁言提示
+                muteNotice.style.display = 'block';
+                // 禁用输入区域
+                inputContainer.style.display = 'none';
+            } else {
+                // 隐藏禁言提示
+                muteNotice.style.display = 'none';
+                // 启用输入区域
+                inputContainer.style.display = 'block';
+            }
+        }
+        
+        // 加载群聊禁言状态
+        async function loadChatMuteStatus() {
+            const chatType = document.querySelector('input[name="chat_type"]')?.value;
+            const chatId = document.querySelector('input[name="id"]')?.value;
+            
+            if (chatType === 'group' && chatId) {
+                try {
+                    const response = await fetch(`get_group_mute_status.php?group_id=${chatId}`);
+                    const data = await response.json();
+                    if (data.success) {
+                        updateChatMuteStatus(data.is_muted);
+                    }
+                } catch (error) {
+                    console.error('加载群聊禁言状态失败:', error);
+                }
+            }
+        }
+        
+        // 聊天菜单功能
+        function toggleChatMenu() {
+            const menu = document.getElementById('chat-menu');
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        }
+        
+        // 点击其他地方关闭聊天菜单
+        document.addEventListener('click', (e) => {
+            const chatMenu = document.getElementById('chat-menu');
+            const chatMenuBtn = document.querySelector('.chat-menu-btn');
+            if (chatMenu && chatMenuBtn && chatMenu.style.display === 'block' && 
+                !chatMenu.contains(e.target) && !chatMenuBtn.contains(e.target)) {
+                chatMenu.style.display = 'none';
+            }
+        });
+        
+        // 删除好友
+        function deleteFriend(friendId) {
+            if (confirm('确定要删除这个好友吗？删除后将无法恢复。')) {
+                fetch(`delete_friend.php?friend_id=${friendId}`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('好友已成功删除');
+                        window.location.href = 'mobilechat.php';
+                    } else {
+                        alert('删除好友失败：' + data.message);
+                    }
+                });
+            }
+        }
+        
+        // 查看群成员
+        function showGroupMembers(groupId) {
+            // 创建群成员弹窗
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            `;
+            
+            const modalContent = document.createElement('div');
+            modalContent.style.cssText = `
+                background: white;
+                border-radius: 12px;
+                width: 90%;
+                max-width: 500px;
+                max-height: 80vh;
+                overflow: auto;
+            `;
+            
+            // 弹窗标题
+            const modalHeader = document.createElement('div');
+            modalHeader.style.cssText = `
+                padding: 15px;
+                border-bottom: 1px solid #e0e0e0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border-radius: 12px 12px 0 0;
+            `;
+            
+            const modalTitle = document.createElement('h3');
+            modalTitle.style.cssText = `
+                margin: 0;
+                font-size: 16px;
+                font-weight: 600;
+            `;
+            modalTitle.textContent = '群成员';
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.style.cssText = `
+                background: none;
+                border: none;
+                font-size: 24px;
+                color: white;
+                cursor: pointer;
+                padding: 0;
+                width: 30px;
+                height: 30px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 50%;
+                transition: background-color 0.2s;
+            `;
+            closeBtn.textContent = '×';
+            closeBtn.onclick = () => modal.remove();
+            closeBtn.onmouseover = () => closeBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+            closeBtn.onmouseout = () => closeBtn.style.backgroundColor = 'transparent';
+            
+            modalHeader.appendChild(modalTitle);
+            modalHeader.appendChild(closeBtn);
+            modalContent.appendChild(modalHeader);
+            
+            // 加载群成员
+            const membersList = document.createElement('div');
+            membersList.style.cssText = `
+                padding: 15px;
+            `;
+            
+            const loadingText = document.createElement('p');
+            loadingText.textContent = '加载群成员中...';
+            loadingText.style.cssText = `
+                text-align: center;
+                color: #666;
+                padding: 20px;
+            `;
+            membersList.appendChild(loadingText);
+            
+            // 点击其他地方关闭所有菜单
+            document.addEventListener('click', (e) => {
+                const allMenus = document.querySelectorAll('.member-menu');
+                allMenus.forEach(menu => menu.style.display = 'none');
+            });
+            
+            // 获取群成员
+            fetch(`get_group_members.php?group_id=${groupId}`)
+                .then(response => response.json())
+                .then(data => {
+                    membersList.innerHTML = '';
+                    
+                    if (data.success) {
+                        data.members.forEach(member => {
+                            const memberDiv = document.createElement('div');
+                            memberDiv.style.cssText = `
+                                display: flex;
+                                align-items: center;
+                                padding: 12px;
+                                border-bottom: 1px solid #f0f0f0;
+                                position: relative;
+                            `;
+                            
+                            const memberAvatar = document.createElement('div');
+                            memberAvatar.style.cssText = `
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 50%;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: white;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-weight: 600;
+                                font-size: 16px;
+                                margin-right: 12px;
+                            `;
+                            memberAvatar.textContent = member.username.substring(0, 2);
+                            
+                            const memberInfo = document.createElement('div');
+                            memberInfo.style.cssText = `
+                                flex: 1;
+                            `;
+                            
+                            const memberName = document.createElement('div');
+                            memberName.style.cssText = `
+                                font-weight: 600;
+                                color: #333;
+                                margin-bottom: 2px;
+                            `;
+                            memberName.textContent = member.username;
+                            
+                            const memberRole = document.createElement('div');
+                            memberRole.style.cssText = `
+                                font-size: 12px;
+                                color: #666;
+                            `;
+                            memberRole.textContent = member.is_owner ? '群主' : (member.is_admin ? '管理员' : '成员');
+                            
+                            memberInfo.appendChild(memberName);
+                            memberInfo.appendChild(memberRole);
+                            
+                            // 成员操作菜单
+                            const menuButton = document.createElement('button');
+                            menuButton.style.cssText = `
+                                background: none;
+                                border: none;
+                                font-size: 18px;
+                                color: #666;
+                                cursor: pointer;
+                                padding: 5px;
+                                border-radius: 50%;
+                                transition: background-color 0.2s;
+                                z-index: 10001;
+                            `;
+                            menuButton.textContent = '⋮';
+                            menuButton.onclick = (e) => {
+                                e.stopPropagation();
+                                // 关闭其他菜单
+                                const allMenus = document.querySelectorAll('.member-menu');
+                                allMenus.forEach(menu => menu.style.display = 'none');
+                                // 显示当前菜单
+                                const menu = menuButton.nextElementSibling;
+                                menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+                            };
+                            
+                            // 菜单容器
+                            const memberMenu = document.createElement('div');
+                            memberMenu.className = 'member-menu';
+                            memberMenu.style.cssText = `
+                                position: absolute;
+                                top: 50%;
+                                right: 40px;
+                                transform: translateY(-50%);
+                                background: white;
+                                border: 1px solid #e0e0e0;
+                                border-radius: 8px;
+                                box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+                                z-index: 10002;
+                                display: none;
+                                min-width: 120px;
+                            `;
+                            
+                            // 发送好友申请按钮
+                            const addFriendBtn = document.createElement('button');
+                            addFriendBtn.style.cssText = `
+                                display: block;
+                                width: 100%;
+                                padding: 10px 15px;
+                                background: none;
+                                border: none;
+                                text-align: left;
+                                font-size: 14px;
+                                color: #333;
+                                cursor: pointer;
+                                border-radius: 8px;
+                                transition: background-color 0.2s;
+                            `;
+                            addFriendBtn.textContent = '发送好友申请';
+                            addFriendBtn.onclick = (e) => {
+                                e.stopPropagation();
+                                sendFriendRequest(member.id, member.username);
+                                // 关闭菜单
+                                memberMenu.style.display = 'none';
+                            };
+                            addFriendBtn.onmouseover = () => addFriendBtn.style.backgroundColor = '#f0f0f0';
+                            addFriendBtn.onmouseout = () => addFriendBtn.style.backgroundColor = 'transparent';
+                            
+                            // 添加按钮到菜单
+                            memberMenu.appendChild(addFriendBtn);
+                            
+                            // 组装成员项
+                            memberDiv.appendChild(memberAvatar);
+                            memberDiv.appendChild(memberInfo);
+                            memberDiv.appendChild(menuButton);
+                            memberDiv.appendChild(memberMenu);
+                            membersList.appendChild(memberDiv);
+                        });
+                    } else {
+                        const errorText = document.createElement('p');
+                        errorText.textContent = '加载群成员失败';
+                        errorText.style.cssText = `
+                            text-align: center;
+                            color: #ff4757;
+                            padding: 20px;
+                        `;
+                        membersList.appendChild(errorText);
+                    }
+                })
+                .catch(error => {
+                    membersList.innerHTML = '';
+                    const errorText = document.createElement('p');
+                    errorText.textContent = '网络错误，加载群成员失败';
+                    errorText.style.cssText = `
+                        text-align: center;
+                        color: #ff4757;
+                        padding: 20px;
+                    `;
+                    membersList.appendChild(errorText);
+                });
+            
+            modalContent.appendChild(membersList);
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+        }
+        
+        // 发送好友申请
+        function sendFriendRequest(userId, username) {
+            if (confirm(`确定要向 ${username} 发送好友申请吗？`)) {
+                fetch('send_friend_request.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `friend_id=${userId}`
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('好友申请已发送');
+                    } else {
+                        alert('发送失败：' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('发送好友申请失败:', error);
+                    alert('网络错误，请稍后重试');
+                });
+            }
+        }
+        
+        // 退出群聊
+        function leaveGroup(groupId) {
+            if (confirm('确定要退出这个群聊吗？退出后将无法恢复。')) {
+                fetch(`leave_group.php?group_id=${groupId}`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('已成功退出群聊');
+                        window.location.href = 'mobilechat.php';
+                    } else {
+                        alert('退出群聊失败：' + data.message);
+                    }
+                });
+            }
+        }
     </script>
     <!-- 封禁提示弹窗 -->
     <div id="ban-notification-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); z-index: 5000; flex-direction: column; align-items: center; justify-content: center;">

@@ -44,6 +44,28 @@ try {
         exit;
     }
 
+    // 检查群聊是否被封禁
+    $stmt = $conn->prepare("SELECT reason, ban_end FROM group_bans WHERE group_id = ? AND status = 'active'");
+    $stmt->execute([$group_id]);
+    $ban_info = $stmt->fetch();
+    
+    if ($ban_info) {
+        // 检查封禁是否已过期
+        if ($ban_info['ban_end'] && strtotime($ban_info['ban_end']) < time()) {
+            // 更新封禁状态为过期
+            $stmt = $conn->prepare("UPDATE group_bans SET status = 'expired' WHERE group_id = ? AND status = 'active'");
+            $stmt->execute([$group_id]);
+            
+            // 插入过期日志
+            $stmt = $conn->prepare("INSERT INTO group_ban_logs (ban_id, action, action_by) VALUES ((SELECT id FROM group_bans WHERE group_id = ? ORDER BY id DESC LIMIT 1), 'expire', NULL)");
+            $stmt->execute([$group_id]);
+        } else {
+            // 群聊被封禁，返回错误信息
+            echo json_encode(['success' => false, 'message' => '群聊被封禁，您暂时无法查看群聊成员和使用群聊功能']);
+            exit;
+        }
+    }
+
     // 创建Group实例
     $group = new Group($conn);
 

@@ -191,6 +191,8 @@ class Group {
             return ['success' => false, 'message' => '发送者不是群成员'];
         }
         
+
+        
         // 检查消息内容是否包含HTML标签
         if (preg_match('/<[^>]*>/', $content)) {
             // 包含HTML标签，替换为"此消息无法被显示"
@@ -372,6 +374,23 @@ class Group {
      * @param int $user_id 操作用户ID
      * @return array 结果
      */
+    /**
+     * 删除文件辅助函数
+     * @param string $file_path 文件路径
+     * @return bool 是否成功删除
+     */
+    private function deleteFile($file_path) {
+        if (!empty($file_path) && file_exists($file_path)) {
+            try {
+                return unlink($file_path);
+            } catch (Exception $e) {
+                error_log("Delete File Error: " . $e->getMessage());
+                return false;
+            }
+        }
+        return true;
+    }
+    
     public function recallGroupMessage($message_id, $user_id) {
         try {
             // 获取消息信息
@@ -406,8 +425,13 @@ class Group {
             }
             
             if ($can_remove) {
+                // 保存文件路径用于后续删除
+                $file_path = $message['file_path'];
+                
                 $stmt = $this->conn->prepare("DELETE FROM group_messages WHERE id = ?");
                 if ($stmt->execute([$message_id])) {
+                    // 删除对应的文件
+                    $this->deleteFile($file_path);
                     return ['success' => true, 'message' => '消息已成功撤回'];
                 } else {
                     return ['success' => false, 'message' => '撤回消息失败'];
@@ -462,11 +486,10 @@ class Group {
      * @return array 群聊列表
      */
     public function getUserGroups($user_id) {
-        $stmt = $this->conn->prepare("SELECT g.*, (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count 
+        $stmt = $this->conn->prepare("SELECT g.*, gm.is_admin, (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count 
                                      FROM groups g 
                                      JOIN group_members gm ON g.id = gm.group_id 
-                                     WHERE gm.user_id = ? 
-                                     GROUP BY g.id");
+                                     WHERE gm.user_id = ?");
         $stmt->execute([$user_id]);
         return $stmt->fetchAll();
     }
@@ -484,6 +507,8 @@ class Group {
         $stmt->execute([$group_id, $user_id]);
         return $stmt->fetch();
     }
+    
+
     
     /**
      * 检查用户是否是群成员

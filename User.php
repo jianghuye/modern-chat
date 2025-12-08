@@ -192,8 +192,8 @@ class User {
             // 开始事务
             $this->conn->beginTransaction();
             
-            // 获取已过期的封禁
-            $stmt = $this->conn->prepare("SELECT id FROM bans WHERE status = 'active' AND ban_end <= NOW()");
+            // 获取已过期的封禁，只处理有结束时间的封禁
+            $stmt = $this->conn->prepare("SELECT id FROM bans WHERE status = 'active' AND ban_end IS NOT NULL AND ban_end <= NOW()");
             $stmt->execute();
             $expired_bans = $stmt->fetchAll();
             
@@ -225,7 +225,7 @@ class User {
      * @param int $user_id 用户ID
      * @param int $banned_by 封禁者ID
      * @param string $reason 封禁理由
-     * @param int $ban_duration 封禁时长（小时）
+     * @param int $ban_duration 封禁时长（秒），0表示永久封禁
      * @return bool 是否封禁成功
      */
     public function banUser($user_id, $banned_by, $reason, $ban_duration) {
@@ -236,16 +236,15 @@ class User {
                 return false;
             }
             
-            // 将小时转换为秒，计算封禁结束时间
-            $ban_duration_seconds = $ban_duration * 3600; // 小时 * 3600秒/小时
-            $ban_end = date('Y-m-d H:i:s', time() + $ban_duration_seconds);
+            // 计算封禁结束时间，0表示永久封禁
+            $ban_end = $ban_duration > 0 ? date('Y-m-d H:i:s', time() + $ban_duration) : null;
             
             // 开始事务
             $this->conn->beginTransaction();
             
             // 插入封禁记录，存储秒数以便后续计算
             $stmt = $this->conn->prepare("INSERT INTO bans (user_id, banned_by, reason, ban_duration, ban_end) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$user_id, $banned_by, $reason, $ban_duration_seconds, $ban_end]);
+            $stmt->execute([$user_id, $banned_by, $reason, $ban_duration, $ban_end]);
             $ban_id = $this->conn->lastInsertId();
             
             // 记录封禁日志

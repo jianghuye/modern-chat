@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'db.php';
+require_once 'Friend.php';
 
 // 检查用户是否登录
 if (!isset($_SESSION['user_id'])) {
@@ -16,15 +17,15 @@ if (!$request_id) {
     exit;
 }
 
-// 删除好友请求
-$stmt = $conn->prepare(
-    "DELETE FROM friends WHERE id = ? AND friend_id = ? AND status = 'pending'"
-);
-$stmt->execute([$request_id, $user_id]);
+// 创建Friend实例
+$friend = new Friend($conn);
 
-if ($stmt->rowCount() > 0) {
-    header('Location: chat.php?success=' . urlencode('好友请求已拒绝'));
+// 拒绝好友请求
+$result = $friend->rejectFriendRequest($user_id, $request_id);
+
+if ($result['success']) {
+    header('Location: mobilechat.php?success=' . urlencode($result['message']));
 } else {
-    header('Location: chat.php?error=' . urlencode('好友请求不存在或已处理'));
+    header('Location: mobilechat.php?error=' . urlencode($result['message']));
 }
 exit;

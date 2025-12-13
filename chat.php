@@ -1,6 +1,12 @@
 <?php
-// 检查用户是否登录
+// 检查系统维护模式
 require_once 'config.php';
+if (getConfig('System_Maintenance', 0) == 1) {
+    include 'Maintenance/index.html';
+    exit;
+}
+
+// 检查用户是否登录
 require_once 'db.php';
 require_once 'User.php';
 require_once 'Friend.php';
@@ -140,6 +146,10 @@ $friends = $friend->getFriends($user_id);
 
 // 获取群聊列表
 $groups = $group->getUserGroups($user_id);
+
+// 获取待处理的好友请求
+$pending_requests = $friend->getPendingRequests($user_id);
+$pending_requests_count = count($pending_requests);
 
 // 获取未读消息计数
 $unread_counts = [];
@@ -946,6 +956,23 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
         </div>
     </div>
     
+    <!-- 好友申请列表弹窗 -->
+    <div id="friend-requests-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 5000; flex-direction: column; align-items: center; justify-content: center;">
+        <div style="background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="color: #333; font-size: 20px; font-weight: 600;">好友申请</h2>
+                <button onclick="closeFriendRequestsModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
+            </div>
+            <div id="friend-requests-list">
+                <!-- 好友申请列表将通过JavaScript动态加载 -->
+                <p style="text-align: center; color: #666; padding: 20px;">加载中...</p>
+            </div>
+            <div style="margin-top: 20px; text-align: center;">
+                <button onclick="closeFriendRequestsModal()" style="padding: 10px 20px; background: #f5f5f5; color: #333; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; font-size: 14px;">关闭</button>
+            </div>
+        </div>
+    </div>
+    
     <?php if (isset($_SESSION['feedback_received']) && $_SESSION['feedback_received']): ?>
         <div style="position: fixed; top: 20px; right: 20px; background: #4caf50; color: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); z-index: 1000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
             您的反馈已收到，正在修复中，感谢您的反馈！
@@ -980,8 +1007,13 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
             </div>
             
             <!-- 搜索结果区域 -->
-            <div id="search-results" style="display: none; padding: 15px; background: white; border-bottom: 1px solid #e0e0e0;">
+            <div id="search-results" style="display: none; padding: 15px; background: white; border-bottom: 1px solid #e0e0e0; max-height: 300px; overflow-y: auto; position: absolute; width: calc(100% - 30px); z-index: 1000;">
                 <p style="color: #666; font-size: 14px; margin-bottom: 10px;">输入用户名或群聊名称进行搜索</p>
+            </div>
+            
+            <!-- 好友申请按钮 -->
+            <div style="padding: 15px; background: white; border-bottom: 1px solid #e0e0e0;">
+                <button class="btn" style="width: 100%; padding: 10px; font-size: 14px;" onclick="showFriendRequests()">📬 好友申请 <?php if ($pending_requests_count > 0): ?><span id="friend-request-count" style="background: #ff4757; color: white; border-radius: 10px; padding: 2px 8px; font-size: 12px; margin-left: 5px;"><?php echo $pending_requests_count; ?></span><?php endif; ?></button>
             </div>
             
             <!-- 创建群聊按钮 -->
@@ -1137,7 +1169,20 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                         </div>
                         <div class="chat-header-info">
                             <h2><?php echo $selected_group['name']; ?></h2>
-                            <p><?php echo $group->getGroupMembers($selected_group['id']) ? count($group->getGroupMembers($selected_group['id'])) : 0; ?> 成员</p>
+                            <p>
+                                <?php 
+                                    if ($selected_group['all_user_group'] == 1) {
+                                        // 全员群聊，成员数量为所有用户的数量
+                                        $stmt = $conn->prepare("SELECT COUNT(*) as total_users FROM users");
+                                        $stmt->execute();
+                                        $total_users = $stmt->fetch()['total_users'];
+                                        echo $total_users . ' 成员';
+                                    } else {
+                                        // 普通群聊，使用现有逻辑
+                                        echo ($group->getGroupMembers($selected_group['id']) ? count($group->getGroupMembers($selected_group['id'])) : 0) . ' 成员';
+                                    }
+                                ?> 
+                            </p>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -1649,16 +1694,7 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                             <h2><?php echo $username; ?></h2>
                             <p><?php echo $_SESSION['email']; ?></p>
                             <?php 
-                            // 获取用户IP地址
-                            function getUserIP() {
-                                if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-                                    return $_SERVER['HTTP_CLIENT_IP'];
-                                } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-                                    return $_SERVER['HTTP_X_FORWARDED_FOR'];
-                                } else {
-                                    return $_SERVER['REMOTE_ADDR'];
-                                }
-                            }
+                            // 使用config.php中定义的getUserIP()函数获取用户IP地址
                             $user_ip = getUserIP();
                             ?>
                             <p style="font-size: 12px; color: #666; margin-top: 2px;">IP地址: <?php echo $user_ip; ?></p>
@@ -1735,46 +1771,7 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                 </div>
             </div>
             
-            <div class="sidebar-section">
-                <h3>好友请求 <?php if (!empty($pending_requests)): ?><span style="background: #ff4757; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; margin-left: 8px;"><?php echo count($pending_requests); ?></span><?php endif; ?></h3>
-                <?php $pending_requests = $friend->getPendingRequests($user_id); ?>
-                <?php if (empty($pending_requests)): ?>
-                    <p style="color: #999; font-size: 14px;">没有待处理的好友请求</p>
-                <?php else: ?>
-                    <?php foreach ($pending_requests as $request): ?>
-                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
-                            <div class="friend-avatar" style="width: 40px; height: 40px; font-size: 16px;">
-                                <?php echo substr($request['username'], 0, 2); ?>
-                            </div>
-                            <div style="flex: 1;">
-                                <h4 style="font-size: 14px; margin-bottom: 2px;"><?php echo $request['username']; ?></h4>
-                                <p style="font-size: 12px; color: #999;"><?php echo $request['email']; ?></p>
-                                <p style="font-size: 11px; color: #999; margin-top: 2px;"><?php echo date('Y-m-d H:i', strtotime($request['created_at'])); ?></p>
-                            </div>
-                            <div style="display: flex; gap: 5px;">
-                                <button class="btn" style="padding: 4px 8px; font-size: 11px; background: #4caf50;" onclick="acceptRequest(<?php echo $request['id']; ?>)">接受</button>
-                                <button class="btn" style="padding: 4px 8px; font-size: 11px; background: #ff4757;" onclick="rejectRequest(<?php echo $request['id']; ?>)">拒绝</button>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
-            
-            <script>
-                // 接受好友请求 - 全局函数
-                function acceptRequest(requestId) {
-                    if (confirm('确定要接受这个好友请求吗？')) {
-                        window.location.href = `accept_request.php?request_id=${requestId}`;
-                    }
-                }
-                
-                // 拒绝好友请求 - 全局函数
-                function rejectRequest(requestId) {
-                    if (confirm('确定要拒绝这个好友请求吗？')) {
-                        window.location.href = `reject_request.php?request_id=${requestId}`;
-                    }
-                }
-            </script>
+
         </div>
     </div>
     
@@ -2644,13 +2641,20 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
         
         // URL检测和转换函数
         function convertUrlsToLinks(text) {
-            // URL正则表达式
-            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            // 首先检查文本是否已经包含HTML链接标签，避免重复转换
+            if (text.includes('<a href')) {
+                return text;
+            }
+            
+            // URL正则表达式 - 更严格的URL匹配，只匹配完整的URL
+            const urlRegex = /(https?:\/\/[^\s<>\"'\(\)]+)/g;
             
             // 替换URL为可点击的链接
             return text.replace(urlRegex, (url) => {
+                // 确保URL不包含HTML标签
+                const cleanUrl = url.replace(/[<>\"'\(\)]+/g, '');
                 // 创建链接HTML
-                return `<a href="${url}" class="message-link" onclick="return confirmLinkClick(event, '${url}')">${url}</a>`;
+                return `<a href="${cleanUrl}" class="message-link" onclick="return confirmLinkClick(event, '${cleanUrl}')">${cleanUrl}</a>`;
             });
         }
         
@@ -3137,15 +3141,24 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                         let statusText = user.status === 'online' ? '在线' : '离线';
                         let friendshipButton = '';
                         
+                        let actionMenu = '';
+                        
                         switch (user.friendship_status) {
                             case 'accepted':
-                                friendshipButton = '<button class="btn" style="padding: 4px 10px; font-size: 12px; background: #4caf50;">已成为好友</button>';
+                                actionMenu = '<span style="color: #4caf50; font-size: 12px;">已成为好友</span>';
                                 break;
                             case 'pending':
-                                friendshipButton = '<button class="btn" style="padding: 4px 10px; font-size: 12px; background: #ff9800;">请求已发送</button>';
+                                actionMenu = '<span style="color: #ff9800; font-size: 12px;">请求已发送</span>';
                                 break;
                             default:
-                                friendshipButton = `<button class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="sendFriendRequest(${user.id})">添加好友</button>`;
+                                actionMenu = `
+                                    <div style="position: relative; display: inline-block;">
+                                        <button class="btn-icon" style="width: 30px; height: 30px; font-size: 16px; padding: 0; background: none; color: #666; cursor: pointer; border: none;" onclick="toggleFriendActionMenu(event, ${user.id})">&#x22EE;</button>
+                                        <div id="action-menu-${user.id}" style="display: none; position: absolute; right: 0; top: 100%; background: white; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); z-index: 1000; min-width: 120px;">
+                                            <button onclick="sendFriendRequest(${user.id}); toggleFriendActionMenu(event, ${user.id});" style="display: block; width: 100%; padding: 10px; text-align: left; border: none; background: none; cursor: pointer; font-size: 14px; color: #333;">添加好友</button>
+                                        </div>
+                                    </div>
+                                `;
                         }
                         
                         resultsHTML += `
@@ -3160,7 +3173,7 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                                         <p style="font-size: 12px; color: #666;">${statusText}</p>
                                     </div>
                                 </div>
-                                ${friendshipButton}
+                                ${actionMenu}
                             </div>
                         `;
                     });
@@ -3186,6 +3199,31 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
             if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
                 searchResults.style.display = 'none';
             }
+        });
+        
+        // 切换好友操作菜单
+        function toggleFriendActionMenu(event, userId) {
+            event.stopPropagation();
+            
+            // 关闭所有其他打开的菜单
+            const allMenus = document.querySelectorAll('[id^="action-menu-"]');
+            allMenus.forEach(menu => {
+                if (menu.id !== `action-menu-${userId}`) {
+                    menu.style.display = 'none';
+                }
+            });
+            
+            // 切换当前菜单
+            const menu = document.getElementById(`action-menu-${userId}`);
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        }
+        
+        // 点击页面其他地方关闭所有操作菜单
+        document.addEventListener('click', () => {
+            const allMenus = document.querySelectorAll('[id^="action-menu-"]');
+            allMenus.forEach(menu => {
+                menu.style.display = 'none';
+            });
         });
         
         // 发送好友请求
@@ -4174,6 +4212,75 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
         // 隐藏创建群聊表单
         function hideCreateGroupForm() {
             document.getElementById('create-group-form').style.display = 'none';
+        }
+        
+        // 显示好友申请弹窗
+        function showFriendRequests() {
+            // 显示弹窗
+            document.getElementById('friend-requests-modal').style.display = 'flex';
+            // 加载好友申请列表
+            loadFriendRequests();
+        }
+        
+        // 关闭好友申请弹窗
+        function closeFriendRequestsModal() {
+            document.getElementById('friend-requests-modal').style.display = 'none';
+        }
+        
+        // 加载好友申请列表
+        async function loadFriendRequests() {
+            try {
+                // 使用fetch API获取好友申请列表
+                const response = await fetch('get_friend_requests.php');
+                const requests = await response.json();
+                
+                const requestsList = document.getElementById('friend-requests-list');
+                
+                if (requests.length === 0) {
+                    requestsList.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">没有待处理的好友申请</p>';
+                    return;
+                }
+                
+                // 生成好友申请列表HTML
+                let html = '';
+                for (const request of requests) {
+                    html += `
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px;">
+                            <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600;">
+                                ${request.username.substr(0, 2)}
+                            </div>
+                            <div style="flex: 1;">
+                                <h4 style="font-size: 14px; margin-bottom: 2px;">${request.username}</h4>
+                                <p style="font-size: 12px; color: #999;">${request.email}</p>
+                                <p style="font-size: 11px; color: #999; margin-top: 2px;">${new Date(request.created_at).toLocaleString('zh-CN')}</p>
+                            </div>
+                            <div style="display: flex; gap: 5px;">
+                                <button onclick="acceptRequest(${request.request_id})" style="padding: 6px 12px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">接受</button>
+                                <button onclick="rejectRequest(${request.request_id})" style="padding: 6px 12px; background: #ff4757; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">拒绝</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                requestsList.innerHTML = html;
+            } catch (error) {
+                console.error('获取好友申请列表失败:', error);
+                document.getElementById('friend-requests-list').innerHTML = '<p style="text-align: center; color: #ff4757; padding: 20px;">获取好友申请失败，请稍后重试</p>';
+            }
+        }
+        
+        // 接受好友请求
+        function acceptRequest(requestId) {
+            if (confirm('确定要接受这个好友请求吗？')) {
+                window.location.href = `accept_request.php?request_id=${requestId}`;
+            }
+        }
+        
+        // 拒绝好友请求
+        function rejectRequest(requestId) {
+            if (confirm('确定要拒绝这个好友请求吗？')) {
+                window.location.href = `reject_request.php?request_id=${requestId}`;
+            }
         }
         
         // 切换聊天类型
@@ -5170,5 +5277,818 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
         });
     </script>
 
-</body>
+<!-- 音乐播放器 -->
+<?php if (getConfig('Random_song', false)): ?>
+<style>
+    /* 音乐播放器样式 */
+    #music-player {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 300px;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        z-index: 1000;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    /* 拖拽时禁止文字选择 */
+    #music-player.dragging {
+        cursor: grabbing;
+        user-select: none;
+    }
+    
+    /* 播放器头部 */
+    #player-header {
+        cursor: move;
+    }
+    
+    /* 音量控制 */
+    #volume-container {
+        position: relative;
+        display: inline-block;
+    }
+    
+    /* 新的音量调节UI */
+    #volume-control {
+        position: absolute;
+        right: -15px;
+        top: -110px;
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 10px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        z-index: 1001;
+    }
+    
+    #volume-slider {
+        width: 80px;
+        height: 5px;
+        background: #e0e0e0;
+        border-radius: 3px;
+        cursor: pointer;
+        overflow: hidden;
+    }
+    
+    #volume-level {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        border-radius: 3px;
+        transition: width 0.1s ease;
+        width: 80%; /* 默认音量80% */
+    }
+    
+    /* 音量增减按钮 */
+    .volume-btn {
+        width: 24px;
+        height: 24px;
+        border: none;
+        background: #f0f0f0;
+        color: #333;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+    }
+    
+    .volume-btn:hover {
+        background: #667eea;
+        color: white;
+        transform: scale(1.1);
+    }
+    
+    /* 音量按钮 */
+    #volume-btn {
+        position: relative;
+    }
+    
+    #music-player.minimized {
+        width: 344px;
+        height: 60px;
+        bottom: 10px;
+        right: 10px;
+    }
+    
+    #player-header {
+        padding: 10px 15px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    
+    #player-toggle {
+        background: none;
+        border: none;
+        color: white;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 5px;
+    }
+    
+    #player-content {
+        padding: 15px;
+    }
+    
+    #music-player.minimized #player-content {
+        padding: 10px;
+        display: flex;
+        align-items: center;
+    }
+    
+    /* 专辑图片 */
+    #album-art {
+        width: 150px;
+        height: 150px;
+        margin: 0 auto 15px;
+        border-radius: 50%;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    #music-player.minimized #album-art {
+        width: 40px;
+        height: 40px;
+        margin: 0 10px 0 0;
+        flex-shrink: 0;
+    }
+    
+    #album-image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: none;
+    }
+    
+    /* 歌曲信息 */
+    #song-info {
+        text-align: center;
+        margin-bottom: 15px;
+    }
+    
+    #music-player.minimized #song-info {
+        flex: 1;
+        margin: 0 10px 0 0;
+        text-align: left;
+    }
+    
+    #song-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+        margin: 0 0 5px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
+    #music-player.minimized #song-title {
+        font-size: 14px;
+        margin: 0 0 2px;
+    }
+    
+    #artist-name {
+        font-size: 14px;
+        color: #666;
+        margin: 0;
+    }
+    
+    #music-player.minimized #artist-name {
+        font-size: 12px;
+    }
+    
+    /* 播放控制 */
+    #player-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 15px;
+    }
+    
+    #music-player.minimized #player-controls {
+        gap: 10px;
+        margin: 0;
+    }
+    
+    .control-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: none;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-size: 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s ease;
+    }
+    
+    #music-player.minimized .control-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+    }
+    
+    .control-btn:hover {
+        transform: scale(1.1);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    #play-btn {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+    }
+    
+    #music-player.minimized #play-btn {
+        width: 35px;
+        height: 35px;
+        font-size: 16px;
+    }
+    
+    /* 进度条 */
+    #progress-container {
+        margin-bottom: 10px;
+    }
+    
+    #music-player.minimized #progress-container {
+        position: absolute;
+        bottom: 0;
+        left: 60px;
+        right: 10px;
+        margin: 0;
+    }
+    
+    #progress-bar {
+        width: 100%;
+        height: 5px;
+        background: #e0e0e0;
+        border-radius: 3px;
+        cursor: pointer;
+        overflow: hidden;
+    }
+    
+    #progress {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        border-radius: 3px;
+        transition: width 0.1s ease;
+    }
+    
+    /* 时间显示 */
+    #time-display {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: #999;
+        margin-top: 5px;
+    }
+    
+    #music-player.minimized #time-display {
+        display: none;
+    }
+    
+    /* 下载链接 */
+    #download-link {
+        display: block;
+        text-align: center;
+        padding: 8px 0;
+        color: #667eea;
+        text-decoration: none;
+        font-size: 12px;
+        border-top: 1px solid #f0f0f0;
+        margin-top: 10px;
+    }
+    
+    #music-player.minimized #download-link {
+        display: none;
+    }
+    
+    /* 状态信息 */
+    #player-status {
+        font-size: 12px;
+        color: #999;
+        text-align: center;
+        margin-top: 10px;
+    }
+    
+    #music-player.minimized #player-status {
+        display: none;
+    }
+    
+    /* 隐藏原生音频控件 */
+    #audio-player {
+        display: none;
+    }
+</style>
+
+<div id="music-player" style="display: none;">
+    <!-- 播放器头部 -->
+    <div id="player-header">
+        <span>音乐播放器</span>
+        <button id="player-toggle" onclick="togglePlayer()">-</button>
+    </div>
+    
+    <!-- 播放器内容 -->
+    <div id="player-content">
+        <!-- 专辑图片 -->
+        <div id="album-art">
+            <img id="album-image" src="" alt="Album Art">
+        </div>
+        
+        <!-- 歌曲信息 -->
+        <div id="song-info">
+            <h3 id="song-title">加载中...</h3>
+            <p id="artist-name"></p>
+        </div>
+        
+        <!-- 播放控制 -->
+        <div id="player-controls">
+            <button class="control-btn" id="prev-btn" onclick="playPrevious()" title="上一首">⏮</button>
+            <button class="control-btn" id="play-btn" onclick="togglePlay()" title="播放/暂停">▶</button>
+            <button class="control-btn" id="next-btn" onclick="playNext()" title="下一首">⏭</button>
+            <div id="volume-container">
+                <button class="control-btn" id="volume-btn" onclick="toggleVolumeControl()" title="音量">🔊</button>
+                <!-- 新的音量调节UI -->
+                <div id="volume-control" style="display: none;">
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 5px;">
+                        <button class="volume-btn" id="volume-up" onclick="adjustVolumeByStep(0.1)" title="增大音量">+</button>
+                        <div id="volume-slider" onclick="adjustVolume(event)">
+                            <div id="volume-level"></div>
+                        </div>
+                        <button class="volume-btn" id="volume-down" onclick="adjustVolumeByStep(-0.1)" title="减小音量">-</button>
+                    </div>
+                </div>
+            </div>
+            <button class="control-btn" id="download-btn" onclick="downloadMusic()" title="下载">⬇</button>
+        </div>
+        
+        <!-- 进度条 -->
+        <div id="progress-container">
+            <div id="progress-bar" onclick="seek(event)">
+                <div id="progress"></div>
+            </div>
+            <div id="time-display">
+                <span id="current-time">0:00</span>
+                <span id="duration">0:00</span>
+            </div>
+        </div>
+        
+        <!-- 状态信息 -->
+        <div id="player-status">正在加载音乐...</div>
+    </div>
+    
+    <!-- 下载链接 -->
+    <a id="download-link" href="" target="_blank" download>下载当前歌曲</a>
+    
+    <!-- 隐藏的音频元素 -->
+    <audio id="audio-player" preload="metadata"></audio>
+</div>
+
+<script>
+    // 全局变量
+    let currentSong = null;
+    let isPlaying = false;
+    let isMinimized = false;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initialX = 0;
+    let initialY = 0;
+    
+    // 页面加载完成后初始化音乐播放器
+    window.addEventListener('load', () => {
+        initMusicPlayer();
+        initDrag();
+    });
+    
+    // 初始化拖拽功能
+    function initDrag() {
+        const player = document.getElementById('music-player');
+        const header = document.getElementById('player-header');
+        
+        // 鼠标按下事件 - 开始拖拽
+        header.addEventListener('mousedown', (e) => {
+            if (e.target.tagName === 'BUTTON') return; // 点击按钮时不开始拖拽
+            
+            isDragging = true;
+            player.classList.add('dragging');
+            
+            // 获取鼠标初始位置
+            startX = e.clientX;
+            startY = e.clientY;
+            
+            // 获取播放器当前位置
+            initialX = player.offsetLeft;
+            initialY = player.offsetTop;
+            
+            // 阻止默认行为和冒泡
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        
+        // 鼠标移动事件 - 拖动元素
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            
+            // 计算移动距离
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            
+            // 更新播放器位置
+            player.style.left = `${initialX + dx}px`;
+            player.style.top = `${initialY + dy}px`;
+            
+            // 移除bottom和right属性，避免冲突
+            player.style.bottom = 'auto';
+            player.style.right = 'auto';
+            
+            // 阻止默认行为
+            e.preventDefault();
+        });
+        
+        // 鼠标释放事件 - 结束拖拽
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                player.classList.remove('dragging');
+            }
+        });
+        
+        // 初始化音量
+        const audioPlayer = document.getElementById('audio-player');
+        audioPlayer.volume = 0.8; // 默认音量80%
+    }
+    
+    // 初始化音乐播放器
+    async function initMusicPlayer() {
+        try {
+            // 先显示播放器
+            const player = document.getElementById('music-player');
+            player.style.display = 'block';
+            
+            // 请求音乐数据
+            await loadNewSong();
+        } catch (error) {
+            console.error('音乐加载失败:', error);
+            document.getElementById('player-status').textContent = '加载失败，请刷新页面重试';
+        }
+    }
+    
+    // 加载新歌曲
+    async function loadNewSong() {
+        document.getElementById('player-status').textContent = '正在加载音乐...';
+        
+        try {
+            // 请求音乐数据
+            const response = await fetch('https://api.qqsuu.cn/api/dm-randmusic?sort=%E7%83%AD%E6%AD%8C%E6%A6%9C&format=json');
+            const data = await response.json();
+            
+            if (data.code === 1 && data.data) {
+                currentSong = data.data;
+                
+                // 更新歌曲信息
+                document.getElementById('song-title').textContent = `${currentSong.name} - ${currentSong.artistsname}`;
+                document.getElementById('artist-name').textContent = currentSong.artistsname;
+                
+                // 设置专辑图片，确保使用HTTPS
+                const albumImage = document.getElementById('album-image');
+                let picUrl = currentSong.picurl;
+                if (picUrl.startsWith('http://')) {
+                    picUrl = picUrl.replace('http://', 'https://');
+                }
+                albumImage.src = picUrl;
+                albumImage.style.display = 'block';
+                
+                // 请求新的音乐API，使用歌曲名称
+                let newAudioUrl = null;
+                let retryCount = 0;
+                const maxRetries = 5;
+                
+                while (retryCount < maxRetries && !newAudioUrl) {
+                    try {
+                        // 使用歌曲名称构建API请求链接
+                        const songName = encodeURIComponent(currentSong.name + ' ' + currentSong.artistsname);
+                        const apiUrl = `https://api.vkeys.cn/v2/music/netease?word=${songName}&choose=1&quality=9`;
+                        console.log(`[音乐播放器] 构建的API请求链接: ${apiUrl}`);
+                        
+                        // 请求新的API
+                        const newResponse = await fetch(apiUrl);
+                        const newData = await newResponse.json();
+                        
+                        // 记录API返回的JSON结果
+                        console.log(`[音乐播放器] API返回的JSON结果:`, newData);
+                        
+                        if (newData.code === 200 && newData.data && newData.data.url) {
+                            newAudioUrl = newData.data.url;
+                            break;
+                        } else {
+                            retryCount++;
+                            console.log(`[音乐播放器] 重试获取音乐链接 (${retryCount}/${maxRetries})...`);
+                            // 重试间隔
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                    } catch (retryError) {
+                        retryCount++;
+                        console.log(`[音乐播放器] 重试获取音乐链接出错 (${retryCount}/${maxRetries}):`, retryError);
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+                }
+                
+                // 如果重试5次后仍未获取到有效链接，使用原链接
+                let audioUrl = newAudioUrl || currentSong.url;
+                
+                // 确保使用HTTPS
+                if (audioUrl.startsWith('http://')) {
+                    audioUrl = audioUrl.replace('http://', 'https://');
+                }
+                
+                console.log(`[音乐播放器] 最终使用的音乐URL: ${audioUrl}`);
+                
+                // 设置音频源
+                const audioPlayer = document.getElementById('audio-player');
+                
+                // 移除之前的事件监听器
+                audioPlayer.removeEventListener('canplaythrough', updateDuration);
+                audioPlayer.removeEventListener('timeupdate', updateProgress);
+                audioPlayer.removeEventListener('ended', loadNewSong);
+                
+                // 设置新的音频源
+                audioPlayer.src = audioUrl;
+                
+                // 设置下载链接，使用第二个API返回的URL
+                const downloadLink = document.getElementById('download-link');
+                downloadLink.href = audioUrl;
+                downloadLink.download = `${currentSong.name} - ${currentSong.artistsname}.mp3`;
+                
+                // 重新添加事件监听器
+                audioPlayer.addEventListener('canplaythrough', updateDuration);
+                audioPlayer.addEventListener('timeupdate', updateProgress);
+                audioPlayer.addEventListener('ended', loadNewSong);
+                
+                // 添加错误处理
+                audioPlayer.addEventListener('error', (event) => {
+                    console.error('音频播放错误:', event);
+                    // 播放出错时不做任何操作，也不切歌曲
+                    document.getElementById('player-status').textContent = '播放出错';
+                });
+                
+                // 自动播放，添加错误处理
+                try {
+                    await audioPlayer.play();
+                    isPlaying = true;
+                    document.getElementById('play-btn').textContent = '⏸';
+                    document.getElementById('player-status').textContent = '正在播放';
+                } catch (playError) {
+                    console.error('自动播放失败:', playError);
+                    isPlaying = false;
+                    document.getElementById('play-btn').textContent = '▶';
+                    document.getElementById('player-status').textContent = '已暂停（点击播放）';
+                }
+            } else {
+                document.getElementById('player-status').textContent = '加载失败，请刷新页面重试';
+            }
+        } catch (error) {
+            console.error('加载歌曲失败:', error);
+            document.getElementById('player-status').textContent = '加载失败，请刷新页面重试';
+        }
+    }
+    
+    // 切换播放/暂停
+    async function togglePlay() {
+        const audioPlayer = document.getElementById('audio-player');
+        const playBtn = document.getElementById('play-btn');
+        
+        if (isPlaying) {
+            try {
+                audioPlayer.pause();
+                playBtn.textContent = '▶';
+                document.getElementById('player-status').textContent = '已暂停';
+                isPlaying = false;
+            } catch (error) {
+                console.error('暂停播放失败:', error);
+            }
+        } else {
+            try {
+                // 检查是否有有效的音频源
+                if (!audioPlayer.src) {
+                    // 重新加载音频源
+                    await loadNewSong();
+                    return;
+                }
+                
+                await audioPlayer.play();
+                playBtn.textContent = '⏸';
+                document.getElementById('player-status').textContent = '正在播放';
+                isPlaying = true;
+            } catch (error) {
+                console.error('播放失败:', error);
+                
+                // 播放失败时，尝试重新请求第二个API获取新的音乐URL
+                try {
+                    document.getElementById('player-status').textContent = '尝试重新获取音乐链接...';
+                    
+                    // 使用歌曲名称构建API请求链接
+                    const songName = encodeURIComponent(currentSong.name + ' ' + currentSong.artistsname);
+                    const apiUrl = `https://api.vkeys.cn/v2/music/netease?word=${songName}&choose=1&quality=9`;
+                    console.log(`[音乐播放器] 重新构建的API请求链接: ${apiUrl}`);
+                    
+                    // 请求新的API
+                    const newResponse = await fetch(apiUrl);
+                    const newData = await newResponse.json();
+                    
+                    // 记录API返回的JSON结果
+                    console.log(`[音乐播放器] 重新请求API返回的JSON结果:`, newData);
+                    
+                    if (newData.code === 200 && newData.data && newData.data.url) {
+                        // 获取新的音乐URL
+                        const newAudioUrl = newData.data.url;
+                        // 确保使用HTTPS
+                        const audioUrl = newAudioUrl.startsWith('http://') ? newAudioUrl.replace('http://', 'https://') : newAudioUrl;
+                        
+                        // 更新音频源
+                        audioPlayer.src = audioUrl;
+                        // 更新下载链接
+                        const downloadLink = document.getElementById('download-link');
+                        downloadLink.href = audioUrl;
+                        downloadLink.download = `${currentSong.name} - ${currentSong.artistsname}.mp3`;
+                        
+                        // 再次尝试播放
+                        await audioPlayer.play();
+                        playBtn.textContent = '⏸';
+                        document.getElementById('player-status').textContent = '正在播放';
+                        isPlaying = true;
+                        console.log(`[音乐播放器] 重新获取音乐链接成功，正在播放`);
+                    } else {
+                        // API请求失败，更新状态
+                        document.getElementById('player-status').textContent = '播放失败，重新获取链接失败';
+                    }
+                } catch (retryError) {
+                    console.error('重新获取音乐链接失败:', retryError);
+                    // 重新请求也失败，更新状态
+                    document.getElementById('player-status').textContent = '播放失败';
+                }
+            }
+        }
+    }
+    
+    // 播放上一首
+    async function playPrevious() {
+        try {
+            await loadNewSong();
+        } catch (error) {
+            console.error('播放上一首失败:', error);
+            document.getElementById('player-status').textContent = '加载失败，请重试';
+        }
+    }
+    
+    // 播放下一首
+    async function playNext() {
+        try {
+            await loadNewSong();
+        } catch (error) {
+            console.error('播放下一首失败:', error);
+            document.getElementById('player-status').textContent = '加载失败，请重试';
+        }
+    }
+    
+    // 下载音乐
+    function downloadMusic() {
+        const downloadLink = document.getElementById('download-link');
+        downloadLink.click();
+    }
+    
+    // 更新进度条
+    function updateProgress() {
+        const audioPlayer = document.getElementById('audio-player');
+        const progress = document.getElementById('progress');
+        const currentTime = document.getElementById('current-time');
+        
+        const duration = audioPlayer.duration;
+        const current = audioPlayer.currentTime;
+        const progressPercent = (current / duration) * 100;
+        
+        progress.style.width = `${progressPercent}%`;
+        currentTime.textContent = formatTime(current);
+    }
+    
+    // 更新总时长
+    function updateDuration() {
+        const audioPlayer = document.getElementById('audio-player');
+        const duration = document.getElementById('duration');
+        duration.textContent = formatTime(audioPlayer.duration);
+    }
+    
+    // 格式化时间
+    function formatTime(seconds) {
+        if (isNaN(seconds)) return '0:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    }
+    
+    // 跳转播放
+    function seek(event) {
+        const audioPlayer = document.getElementById('audio-player');
+        const progressBar = document.getElementById('progress-bar');
+        const rect = progressBar.getBoundingClientRect();
+        // 限制percent范围在0-1之间，避免currentTime超过duration
+        const percent = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        audioPlayer.currentTime = percent * audioPlayer.duration;
+    }
+    
+    // 切换播放器大小
+    function togglePlayer() {
+        const player = document.getElementById('music-player');
+        const toggleBtn = document.getElementById('player-toggle');
+        
+        isMinimized = !isMinimized;
+        player.classList.toggle('minimized', isMinimized);
+        toggleBtn.textContent = isMinimized ? '+' : '-';
+    }
+    
+    // 切换音量控制UI显示
+    function toggleVolumeControl() {
+        const volumeControl = document.getElementById('volume-control');
+        volumeControl.style.display = volumeControl.style.display === 'block' ? 'none' : 'block';
+    }
+    
+    // 通过点击+/-按钮调节音量
+    function adjustVolumeByStep(step) {
+        const audioPlayer = document.getElementById('audio-player');
+        // 计算新的音量
+        let newVolume = audioPlayer.volume + step;
+        // 限制音量范围在0-1之间
+        newVolume = Math.max(0, Math.min(1, newVolume));
+        // 更新音频音量
+        audioPlayer.volume = newVolume;
+        // 更新音量滑块UI
+        const volumeLevel = document.getElementById('volume-level');
+        volumeLevel.style.width = `${newVolume * 100}%`;
+        // 更新音量按钮图标
+        updateVolumeIcon(newVolume);
+    }
+    
+    // 调节音量（通过点击滑块）
+    function adjustVolume(event) {
+        const volumeSlider = document.getElementById('volume-slider');
+        const rect = volumeSlider.getBoundingClientRect();
+        
+        // 计算鼠标在滑块上的水平位置（从左到右）
+        const horizontalPosition = event.clientX - rect.left;
+        // 计算百分比，鼠标在滑块左侧时音量小，右侧时音量大
+        const percent = Math.max(0, Math.min(1, horizontalPosition / rect.width));
+        
+        // 更新音频音量
+        const audioPlayer = document.getElementById('audio-player');
+        audioPlayer.volume = percent;
+        
+        // 更新音量滑块UI
+        const volumeLevel = document.getElementById('volume-level');
+        volumeLevel.style.width = `${percent * 100}%`;
+        
+        // 更新音量按钮图标
+        updateVolumeIcon(percent);
+    }
+    
+    // 更新音量按钮图标
+    function updateVolumeIcon(volume) {
+        const volumeBtn = document.getElementById('volume-btn');
+        if (volume === 0) {
+            volumeBtn.textContent = '🔇';
+        } else if (volume < 0.5) {
+            volumeBtn.textContent = '🔉';
+        } else {
+            volumeBtn.textContent = '🔊';
+        }
+    }
+    
+    // 点击页面其他地方关闭音量控制UI
+    document.addEventListener('click', (event) => {
+        const volumeContainer = document.getElementById('volume-container');
+        const volumeControl = document.getElementById('volume-control');
+        if (!volumeContainer.contains(event.target)) {
+            volumeControl.style.display = 'none';
+        }
+    });
+</script>
+<?php endif; ?>
+    </body>
 </html>

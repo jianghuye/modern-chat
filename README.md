@@ -36,6 +36,12 @@
 - 👥 **移动端群成员操作** - 移动端群成员列表支持向成员发送好友申请
 - 🗑️ **移动端删除好友** - 移动端支持删除好友功能
 - 📨 **移动端群聊操作** - 移动端支持查看群成员和退出群聊功能
+- 🎵 **音乐播放器** - 内置音乐播放器，支持随机播放歌曲
+- 📱 **电脑端音乐播放器** - 电脑端支持音乐播放器功能
+- 🎛️ **音量控制** - 支持调节音量大小
+- 🎮 **播放控制** - 支持播放/暂停、上一首、下一首
+- 📥 **音乐下载** - 支持下载当前播放的歌曲
+- ⚙️ **可配置** - 支持在config.json中配置是否启用随机播放功能
 
 ## 技术栈
 
@@ -59,20 +65,21 @@
     "email_verify": true,
     "email_verify_api": "https:\/\/api.nbhao.org\/v1\/email\/verify",
     "email_verify_api_Request": "POST",
-    "email_verify_api_Verify_parameters": "message.result"
-}
-```
-`Create_a_group_chat_for_all_members`: 你希望用户注册后自动创建一个群聊，群聊名称为所有用户的用户名拼接，例如：user1user2user3
-`Restrict_registration`: 是否限制注册（如果配置了这个必须配置下面的Restrict_registration_ip的数量）
-`Restrict_registration_ip`: 你希望一个IP地址最多注册几个账号
-`user_name_max`: 你希望最大设置的用户名长度
-`ban_system`: 是否启用封禁系统
-`upload_files_max`: 你希望用户最大可发送的文件大小（MB）
-`Session_Duration`: 用户会话时长（小时），默认1小时
-`email_verify`: 是否启用邮箱验证
-`email_verify_api`: 邮箱验证 API 地址
-`email_verify_api_Request`: 邮箱验证 API 请求方法（GET 或 POST）
-`email_verify_api_Verify_parameters`: 邮箱验证 API 返回结果参数名（例如："message.result"）
+    "email_verify_api_Verify_parameters": "message.result",
+    "Random_song": false
+}```
+`Create_a_group_chat_for_all_members`: 你希望用户注册后自动创建一个群聊，群聊名称为所有用户的用户名拼接，例如：全员群聊-1.
+`Restrict_registration`: 是否限制注册（如果配置了这个必须配置下面的Restrict_registration_ip的数量）.
+`Restrict_registration_ip`: 你希望一个IP地址最多注册几个账号.
+`user_name_max`: 你希望最大设置的用户名长度.
+`ban_system`: 是否启用封禁系统.
+`upload_files_max`: 你希望用户最大可发送的文件大小（MB）.
+`Session_Duration`: 用户会话时长（小时），默认1小时.
+`email_verify`: 是否启用邮箱验证.
+`email_verify_api`: 邮箱验证 API 地址.
+`email_verify_api_Request`: 邮箱验证 API 请求方法（GET 或 POST）.
+`email_verify_api_Verify_parameters`: 邮箱验证 API 返回结果参数名（例如："message.result"）.
+`Random_song`: 是否启用随机播放歌曲功能，true为启用，false为禁用.
 
 请根据您的实际配置修改这些值。
 
@@ -349,7 +356,28 @@ docker-compose restart
 - 点击"发送好友申请"选项向该成员发送好友申请
 - 确认发送申请
 
-### 19. 移动端其他功能
+### 20. 音乐播放器使用说明
+
+#### 20.1 基本操作
+
+- **播放/暂停**：点击播放器中央的播放/暂停按钮
+- **上一首**：点击左侧的上一首按钮
+- **下一首**：点击右侧的下一首按钮
+- **调节音量**：点击音量按钮，然后点击+/-按钮或拖动音量滑块
+- **下载歌曲**：点击下载按钮下载当前播放的歌曲
+- **切换播放器大小**：点击播放器右上角的+/-按钮
+
+#### 20.2 播放器功能
+
+- **自动播放**：页面加载完成后自动播放歌曲
+- **随机播放**：每次播放的歌曲都是随机的
+- **自动切歌**：歌曲播放结束后自动播放下一首
+- **拖拽功能**：可以拖拽播放器到页面任意位置
+- **音量控制**：支持调节音量大小，带有音量图标变化
+- **进度显示**：显示当前播放时间和总时长
+- **响应式设计**：支持桌面端和移动端
+
+### 21. 移动端其他功能
 
 - 移动端支持发送文本消息和文件
 - 移动端支持查看好友在线状态
@@ -357,6 +385,7 @@ docker-compose restart
 - 移动端支持提交反馈
 - 移动端支持扫码登录PC端
 - 移动端支持消息撤回和重新编辑
+- 移动端支持音乐播放器功能
 
 ---
 

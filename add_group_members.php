@@ -55,7 +55,7 @@ try {
 
     // 检查用户是否是群聊管理员或群主
     $stmt = $conn->prepare("SELECT gm.is_admin, g.owner_id FROM group_members gm
-                         JOIN groups g ON gm.group_id = g.id
+                         JOIN `groups` g ON gm.group_id = g.id
                          WHERE gm.group_id = ? AND gm.user_id = ?");
     $stmt->execute([$group_id, $user_id]);
     $member_info = $stmt->fetch();

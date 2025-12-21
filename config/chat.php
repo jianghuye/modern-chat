@@ -19,7 +19,7 @@ function createGroupTables() {
     
     $create_tables_sql = "
     -- 创建群聊表
-    CREATE TABLE IF NOT EXISTS groups (
+    CREATE TABLE IF NOT EXISTS `groups` (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         creator_id INT NOT NULL,
@@ -37,7 +37,7 @@ function createGroupTables() {
         user_id INT NOT NULL,
         is_admin BOOLEAN DEFAULT FALSE,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         UNIQUE KEY unique_group_user (group_id, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -53,7 +53,7 @@ function createGroupTables() {
         file_size INT,
         file_type VARCHAR(50),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
         FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     

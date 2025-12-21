@@ -19,7 +19,7 @@ function createGroupTables() {
     
     $create_tables_sql = "
     -- 创建群聊表
-    CREATE TABLE IF NOT EXISTS groups (
+    CREATE TABLE IF NOT EXISTS `groups` (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         creator_id INT NOT NULL,
@@ -37,7 +37,7 @@ function createGroupTables() {
         user_id INT NOT NULL,
         is_admin BOOLEAN DEFAULT FALSE,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         UNIQUE KEY unique_group_user (group_id, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -53,7 +53,7 @@ function createGroupTables() {
         file_size INT,
         file_type VARCHAR(50),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES `groups`(id) ON DELETE CASCADE,
         FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     
@@ -112,14 +112,14 @@ $create_all_group = getConfig('Create_a_group_chat_for_all_members', false);
 if ($create_all_group) {
     // 检查是否需要添加all_user_group字段
     try {
-        $stmt = $conn->prepare("SHOW COLUMNS FROM groups LIKE 'all_user_group'");
+        $stmt = $conn->prepare("SHOW COLUMNS FROM `groups` LIKE 'all_user_group'");
         $stmt->execute();
         $column_exists = $stmt->fetch();
         
         if (!$column_exists) {
             // 添加all_user_group字段
-            $conn->exec("ALTER TABLE groups ADD COLUMN all_user_group INT DEFAULT 0 AFTER owner_id");
-            error_log("Added all_user_group column to groups table");
+            $conn->exec("ALTER TABLE `groups` ADD COLUMN all_user_group INT DEFAULT 0 AFTER owner_id");
+            error_log("Added all_user_group column to `groups` table");
         }
     } catch (PDOException $e) {
         error_log("Error checking/adding all_user_group column: " . $e->getMessage());

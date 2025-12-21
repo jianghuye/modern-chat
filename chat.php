@@ -917,7 +917,7 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
     </div>
     
     <!-- 协议同意提示弹窗 -->
-    <div id="terms-agreement-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.9); z-index: 5000; flex-direction: column; align-items: center; justify-content: center; overflow: auto;">
+    <!-- div id="terms-agreement-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.9); z-index: 5000; flex-direction: column; align-items: center; justify-content: center; overflow: auto;">
         <div style="background: white; padding: 30px; border-radius: 12px; width: 90%; max-width: 600px; margin: 20px;">
             <h2 style="color: #333; margin-bottom: 20px; font-size: 24px; text-align: center;">用户协议</h2>
             <div style="max-height: 400px; overflow-y: auto; margin-bottom: 20px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
@@ -954,7 +954,7 @@ $agreed_to_terms = $user->hasAgreedToTerms($user_id);
                 </button>
             </div>
         </div>
-    </div>
+</div -!>
     
     <!-- 好友申请列表弹窗 -->
     <div id="friend-requests-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 5000; flex-direction: column; align-items: center; justify-content: center;">

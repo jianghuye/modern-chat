@@ -42,7 +42,7 @@ class Message {
                 "INSERT INTO messages (sender_id, receiver_id, content, type, status, is_encrypted) 
                  VALUES (?, ?, ?, 'text', 'sent', ?)"
             );
-            $stmt->execute([$sender_id, $receiver_id, $encrypted_content, $encrypted_content !== $filtered_content]);
+            $stmt->execute([$sender_id, $receiver_id, $encrypted_content, (int)($encrypted_content !== $filtered_content)]);
             
             $message_id = $this->conn->lastInsertId();
             $this->updateSession($sender_id, $receiver_id, $message_id);
@@ -59,10 +59,10 @@ class Message {
     public function sendFileMessage($sender_id, $receiver_id, $file_path, $file_name, $file_size) {
         try {
             $stmt = $this->conn->prepare(
-                "INSERT INTO messages (sender_id, receiver_id, file_path, file_name, file_size, type, status) 
-                 VALUES (?, ?, ?, ?, ?, 'file', 'sent')"
+                "INSERT INTO messages (sender_id, receiver_id, file_path, file_name, file_size, type, status, is_encrypted) 
+                 VALUES (?, ?, ?, ?, ?, 'file', 'sent', ?)"
             );
-            $stmt->execute([$sender_id, $receiver_id, $file_path, $file_name, $file_size]);
+            $stmt->execute([$sender_id, $receiver_id, $file_path, $file_name, $file_size,0]);
             
             $message_id = $this->conn->lastInsertId();
             $this->updateSession($sender_id, $receiver_id, $message_id);

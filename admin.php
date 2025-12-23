@@ -107,7 +107,7 @@ try {
                                         u1.username as creator_username, 
                                         u2.username as owner_username,
                                         (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
-                                 FROM groups g
+                                 FROM `groups` g
                                  JOIN users u1 ON g.creator_id = u1.id
                                  JOIN users u2 ON g.owner_id = u2.id
                                  ORDER BY g.created_at DESC");
@@ -135,7 +135,7 @@ try {
                                         g.name as group_name
                                  FROM group_messages gm
                                  JOIN users u ON gm.sender_id = u.id
-                                 JOIN groups g ON gm.group_id = g.id
+                                 JOIN `groups` g ON gm.group_id = g.id
                                  ORDER BY gm.created_at DESC
                                  LIMIT 1000"); // 限制1000条消息
     $stmt->execute();

@@ -26,7 +26,7 @@ class Group {
             $this->conn->beginTransaction();
             
             // 创建群聊
-            $stmt = $this->conn->prepare("INSERT INTO groups (name, creator_id, owner_id) VALUES (?, ?, ?)");
+            $stmt = $this->conn->prepare("INSERT INTO `groups` (name, creator_id, owner_id) VALUES (?, ?, ?)");
             $stmt->execute([$name, $creator_id, $creator_id]);
             $group_id = $this->conn->lastInsertId();
             
@@ -57,7 +57,7 @@ class Group {
      * @return array|false 群聊信息或false
      */
     public function getGroupInfo($group_id) {
-        $stmt = $this->conn->prepare("SELECT * FROM groups WHERE id = ?");
+        $stmt = $this->conn->prepare("SELECT * FROM `groups` WHERE id = ?");
         $stmt->execute([$group_id]);
         return $stmt->fetch();
     }
@@ -169,7 +169,7 @@ class Group {
      */
     public function transferOwnership($group_id, $current_owner_id, $new_owner_id) {
         // 验证当前用户是群主
-        $stmt = $this->conn->prepare("SELECT owner_id FROM groups WHERE id = ? AND owner_id = ?");
+        $stmt = $this->conn->prepare("SELECT owner_id FROM `groups` WHERE id = ? AND owner_id = ?");
         $stmt->execute([$group_id, $current_owner_id]);
         if (!$stmt->fetch()) {
             return false;
@@ -186,7 +186,7 @@ class Group {
             $this->conn->beginTransaction();
             
             // 更新群主
-            $stmt = $this->conn->prepare("UPDATE groups SET owner_id = ? WHERE id = ?");
+            $stmt = $this->conn->prepare("UPDATE `groups` SET owner_id = ? WHERE id = ?");
             $stmt->execute([$new_owner_id, $group_id]);
             
             // 设置新群主为管理员
@@ -230,7 +230,7 @@ class Group {
         $file_type = isset($file_info['file_type']) ? $file_info['file_type'] : null;
         
         // 群聊消息暂时不加密，因为涉及多个接收者
-        $is_encrypted = false;
+        $is_encrypted = 0;
         
         $stmt = $this->conn->prepare("INSERT INTO group_messages (group_id, sender_id, content, file_path, file_name, file_size, file_type, is_encrypted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         if ($stmt->execute([$group_id, $sender_id, $content, $file_path, $file_name, $file_size, $file_type, $is_encrypted])) {
@@ -439,7 +439,7 @@ class Group {
         try {
             // 获取消息信息
             $stmt = $this->conn->prepare("SELECT gm.*, g.owner_id FROM group_messages gm 
-                                         JOIN groups g ON gm.group_id = g.id 
+                                         JOIN `groups` g ON gm.group_id = g.id 
                                          WHERE gm.id = ?");
             $stmt->execute([$message_id]);
             $message = $stmt->fetch();
@@ -515,14 +515,14 @@ class Group {
         }
         
         // 群主不能直接退出，必须先转让群主
-        $stmt = $this->conn->prepare("SELECT owner_id FROM groups WHERE id = ? AND owner_id = ?");
+        $stmt = $this->conn->prepare("SELECT owner_id FROM `groups` WHERE id = ? AND owner_id = ?");
         $stmt->execute([$group_id, $user_id]);
         if ($stmt->fetch()) {
             return false;
         }
         
         // 检查是否是全员群聊，如果是则禁止退出
-        $stmt = $this->conn->prepare("SELECT all_user_group FROM groups WHERE id = ?");
+        $stmt = $this->conn->prepare("SELECT all_user_group FROM `groups` WHERE id = ?");
         $stmt->execute([$group_id]);
         $group = $stmt->fetch();
         if ($group && $group['all_user_group'] > 0) {
@@ -548,12 +548,12 @@ class Group {
         
         if ($is_admin_exists) {
             $stmt = $this->conn->prepare("SELECT g.*, gm.is_admin, (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count 
-                                         FROM groups g 
+                                         FROM `groups` g 
                                          JOIN group_members gm ON g.id = gm.group_id 
                                          WHERE gm.user_id = ?");
         } else {
             $stmt = $this->conn->prepare("SELECT g.*, (gm.role = 'admin') as is_admin, (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count 
-                                         FROM groups g 
+                                         FROM `groups` g 
                                          JOIN group_members gm ON g.id = gm.group_id 
                                          WHERE gm.user_id = ?");
         }
@@ -604,11 +604,11 @@ class Group {
         
         if ($is_admin_exists) {
             $stmt = $this->conn->prepare("SELECT gm.is_admin, g.owner_id FROM group_members gm 
-                                         JOIN groups g ON gm.group_id = g.id 
+                                         JOIN `groups` g ON gm.group_id = g.id 
                                          WHERE gm.group_id = ? AND gm.user_id = ?");
         } else {
             $stmt = $this->conn->prepare("SELECT (gm.role = 'admin') as is_admin, g.owner_id FROM group_members gm 
-                                         JOIN groups g ON gm.group_id = g.id 
+                                         JOIN `groups` g ON gm.group_id = g.id 
                                          WHERE gm.group_id = ? AND gm.user_id = ?");
         }
         $stmt->execute([$group_id, $user_id]);
@@ -687,7 +687,7 @@ class Group {
      */
     public function getGroupInvitations($user_id) {
         $stmt = $this->conn->prepare("SELECT gi.*, g.name as group_name, u.username as inviter_name, u.avatar as inviter_avatar FROM group_invitations gi
-                                     JOIN groups g ON gi.group_id = g.id
+                                     JOIN `groups` g ON gi.group_id = g.id
                                      JOIN users u ON gi.inviter_id = u.id
                                      WHERE gi.invitee_id = ?
                                      ORDER BY gi.created_at DESC");
@@ -883,7 +883,7 @@ class Group {
                                             u1.username as creator_username, 
                                             u2.username as owner_username,
                                             (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
-                                     FROM groups g
+                                     FROM `groups` g
                                      JOIN users u1 ON g.creator_id = u1.id
                                      JOIN users u2 ON g.owner_id = u2.id
                                      ORDER BY g.created_at DESC");
@@ -901,7 +901,7 @@ class Group {
                                             g.name as group_name
                                      FROM group_messages gm
                                      JOIN users u ON gm.sender_id = u.id
-                                     JOIN groups g ON gm.group_id = g.id
+                                     JOIN `groups` g ON gm.group_id = g.id
                                      ORDER BY gm.created_at DESC
                                      LIMIT 1000"); // 限制1000条消息
         $stmt->execute();
@@ -917,7 +917,7 @@ class Group {
     public function deleteGroup($group_id, $owner_id = null) {
         // 如果提供了owner_id，验证该用户是否是群主
         if ($owner_id !== null) {
-            $stmt = $this->conn->prepare("SELECT id FROM groups WHERE id = ? AND owner_id = ?");
+            $stmt = $this->conn->prepare("SELECT id FROM `groups` WHERE id = ? AND owner_id = ?");
             $stmt->execute([$group_id, $owner_id]);
             if (!$stmt->fetch()) {
                 return false;
@@ -925,7 +925,7 @@ class Group {
         }
         
         // 检查是否是全员群聊，如果是则禁止删除
-        $stmt = $this->conn->prepare("SELECT all_user_group FROM groups WHERE id = ?");
+        $stmt = $this->conn->prepare("SELECT all_user_group FROM `groups` WHERE id = ?");
         $stmt->execute([$group_id]);
         $group = $stmt->fetch();
         if ($group && $group['all_user_group'] > 0) {
@@ -944,7 +944,7 @@ class Group {
             $stmt->execute([$group_id]);
             
             // 删除群聊
-            $stmt = $this->conn->prepare("DELETE FROM groups WHERE id = ?");
+            $stmt = $this->conn->prepare("DELETE FROM `groups` WHERE id = ?");
             $stmt->execute([$group_id]);
             
             $this->conn->commit();
@@ -968,7 +968,7 @@ class Group {
             
             // 创建群聊
             $group_name = "全员群聊-{$group_number}";
-            $stmt = $this->conn->prepare("INSERT INTO groups (name, creator_id, owner_id, all_user_group) VALUES (?, ?, ?, ?)");
+            $stmt = $this->conn->prepare("INSERT INTO `groups` (name, creator_id, owner_id, all_user_group) VALUES (?, ?, ?, ?)");
             $stmt->execute([$group_name, $creator_id, $creator_id, $group_number]);
             $group_id = $this->conn->lastInsertId();
             
@@ -1001,7 +1001,7 @@ class Group {
      * @return array 全员群聊列表
      */
     public function getAllUserGroups() {
-        $stmt = $this->conn->prepare("SELECT * FROM groups WHERE all_user_group > 0 ORDER BY all_user_group ASC");
+        $stmt = $this->conn->prepare("SELECT * FROM `groups` WHERE all_user_group > 0 ORDER BY all_user_group ASC");
         $stmt->execute();
         return $stmt->fetchAll();
     }
@@ -1037,7 +1037,7 @@ class Group {
      * @return int 当前全员群聊的数量
      */
     public function getCurrentAllUserGroupNumber() {
-        $stmt = $this->conn->prepare("SELECT MAX(all_user_group) as max_group FROM groups WHERE all_user_group > 0");
+        $stmt = $this->conn->prepare("SELECT MAX(all_user_group) as max_group FROM `groups` WHERE all_user_group > 0");
         $stmt->execute();
         $result = $stmt->fetch();
         return $result['max_group'] ? (int)$result['max_group'] : 0;

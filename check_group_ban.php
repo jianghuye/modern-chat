@@ -13,7 +13,7 @@ if ($group_id <= 0) {
 
 try {
     // 检查群聊是否存在
-    $stmt = $conn->prepare("SELECT name FROM groups WHERE id = ?");
+    $stmt = $conn->prepare("SELECT name FROM `groups` WHERE id = ?");
     $stmt->execute([$group_id]);
     $group = $stmt->fetch();
     

@@ -278,11 +278,11 @@ class Group {
         try {
             if ($file_path) {
                 // 发送文件消息，只使用数据库中实际存在的字段
-                $stmt = $this->conn->prepare("INSERT INTO group_messages (group_id, sender_id, content, file_path, file_name, file_size) VALUES (?, ?, ?, ?, ?, ?)");
+                $stmt = $this->conn->prepare("INSERT INTO group_messages (group_id, sender_id, content, file_path, file_name, file_size, is_encrypted) VALUES (?, ?, ?, ?, ?, ?, 0)");
                 $result = $stmt->execute([$group_id, $sender_id, $content, $file_path, $file_name, $file_size]);
             } else {
                 // 发送文本消息，只使用数据库中实际存在的字段
-                $stmt = $this->conn->prepare("INSERT INTO group_messages (group_id, sender_id, content) VALUES (?, ?, ?)");
+                $stmt = $this->conn->prepare("INSERT INTO group_messages (group_id, sender_id, content, is_encrypted) VALUES (?, ?, ?, 0)");
                 $result = $stmt->execute([$group_id, $sender_id, $content]);
             }
             

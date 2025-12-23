@@ -21,8 +21,8 @@ class Message {
             }
             
             $stmt = $this->conn->prepare(
-                "INSERT INTO messages (sender_id, receiver_id, content, type, status) 
-                 VALUES (?, ?, ?, 'text', 'sent')"
+                "INSERT INTO messages (sender_id, receiver_id, content, type, status, is_encrypted) 
+                 VALUES (?, ?, ?, 'text', 'sent', 0)"
             );
             $stmt->execute([$sender_id, $receiver_id, $filtered_content]);
             
@@ -41,8 +41,8 @@ class Message {
     public function sendFileMessage($sender_id, $receiver_id, $file_path, $file_name, $file_size) {
         try {
             $stmt = $this->conn->prepare(
-                "INSERT INTO messages (sender_id, receiver_id, file_path, file_name, file_size, type, status) 
-                 VALUES (?, ?, ?, ?, ?, 'file', 'sent')"
+                "INSERT INTO messages (sender_id, receiver_id, file_path, file_name, file_size, type, status, is_encrypted) 
+                 VALUES (?, ?, ?, ?, ?, 'file', 'sent', 0)"
             );
             $stmt->execute([$sender_id, $receiver_id, $file_path, $file_name, $file_size]);
             

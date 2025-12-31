@@ -32,15 +32,21 @@ class FileUpload {
             
             // 检查文件大小
             if ($file['size'] > $this->maxFileSize) {
+                $max_size_mb = round($this->maxFileSize / (1024 * 1024));
                 error_log("File too large: " . $file['size'] . " bytes, max allowed: " . $this->maxFileSize . " bytes");
-                return ['success' => false, 'message' => '文件大小不能超过150MB'];
+                return ['success' => false, 'message' => '文件大小不能超过' . $max_size_mb . 'MB'];
             }
             
             // 禁止上传的网页格式文件扩展名
             $forbidden_extensions = ['html', 'htm', 'php', 'asp', 'aspx', 'jsp', 'js', 'css', 'xml', 'svg', 'xhtml', 'shtml', 'phtml', 'pl', 'py', 'cgi', 'php3', 'php4', 'php5', 'php7', 'php8', 'jspf', 'jspx', 'wss', 'do', 'action', 'cfm', 'cfml', 'cfc', 'lua', 'rb', 'go', 'sh', 'bat', 'cmd', 'exe', 'dll', 'com', 'pif', 'scr', 'jsx', 'tsx', 'ts', 'jsonp', 'vbs', 'vbe', 'wsf', 'wsc', 'htaccess', 'htpasswd', 'ini', 'conf', 'config', 'inc', 'module', 'theme', 'tpl', 'twig', 'blade', 'mustache', 'ejs', 'hbs', 'pug', 'jade', 'haml', 'slim', 'liquid', 'jinja2', 'nunjucks', 'handlebars', 'marko', 'riot', 'vue', 'svelte', 'angular', 'react', 'ember', 'backbone', 'marionette', 'knockout', 'meteor', 'polymer', 'aurelia', 'vuex', 'redux', 'mobx', 'flux', 'relay', 'apollo', 'graphql', 'rest', 'api', 'swagger', 'openapi', 'raml', 'oas', 'soap', 'wsdl', 'wadl', 'json-schema', 'xml-schema', 'xsd', 'dtd', 'rdf', 'owl', 'turtle', 'n3', 'ntriples', 'jsonld', 'microdata', 'rdfa', 'schema', 'structured-data', 'meta', 'link', 'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'param', 'source', 'code', 'pre', 'textarea', 'input', 'select', 'option', 'form', 'button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'file', 'hidden', 'password', 'tel', 'email', 'url', 'search', 'number', 'range', 'color', 'date', 'time', 'datetime', 'datetime-local', 'month', 'week'];
             
-            // 获取文件扩展名
+            // 获取文件扩展名，防止::DATA流绕过
             $original_name = basename($file['name']);
+            
+            // 移除Windows ::DATA流
+            $original_name = preg_replace('/::DATA$/i', '', $original_name);
+            
+            // 获取真实扩展名
             $extension = strtolower(pathinfo($original_name, PATHINFO_EXTENSION));
             
             // 检查文件扩展名是否在禁止列表中
@@ -51,7 +57,6 @@ class FileUpload {
             
             // 跳过文件类型检查，因为服务器没有安装fileinfo扩展
             // 使用文件扩展名作为MIME类型的替代
-            $file_extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
             $mime_type = $file['type']; // 使用浏览器提供的MIME类型
             
             // 如果浏览器没有提供MIME类型，根据扩展名猜测

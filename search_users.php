@@ -1,4 +1,6 @@
 <?php
+// 开始会话
+session_start();
 require_once 'config.php';
 require_once 'db.php';
 require_once 'User.php';
@@ -21,10 +23,10 @@ if (empty($search_term)) {
 $user = new User($conn);
 
 // 搜索用户
-$results = $user->searchUsers($search_term, $user_id);
+$user_results = $user->searchUsers($search_term, $user_id);
 
 // 获取用户与搜索结果的关系状态
-foreach ($results as $key => $result) {
+foreach ($user_results as $key => $result) {
     // 检查是否已经是好友
     $stmt = $conn->prepare(
         "SELECT status FROM friends 
@@ -34,13 +36,33 @@ foreach ($results as $key => $result) {
     $friendship = $stmt->fetch();
     
     if ($friendship) {
-        $results[$key]['friendship_status'] = $friendship['status'];
+        $user_results[$key]['friendship_status'] = $friendship['status'];
     } else {
-        $results[$key]['friendship_status'] = 'none';
+        $user_results[$key]['friendship_status'] = 'none';
     }
+    
+    // 获取用户状态
+    $stmt = $conn->prepare("SELECT status FROM users WHERE id = ?");
+    $stmt->execute([$result['id']]);
+    $user_status = $stmt->fetch();
+    $user_results[$key]['status'] = $user_status['status'] ?? 'offline';
 }
+
+// 搜索当前用户加入的群聊
+$group_results = [];
+$stmt = $conn->prepare(
+    "SELECT g.id, g.name, COUNT(gm.id) as member_count 
+     FROM groups g 
+     JOIN group_members gm ON g.id = gm.group_id 
+     WHERE gm.user_id = ? AND g.name LIKE ? 
+     GROUP BY g.id, g.name 
+     ORDER BY g.name ASC"
+);
+$stmt->execute([$user_id, "%$search_term%"]);
+$group_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 echo json_encode([
     'success' => true,
-    'users' => $results
+    'users' => $user_results,
+    'groups' => $group_results
 ]);

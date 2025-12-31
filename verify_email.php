@@ -77,8 +77,7 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 $response = curl_exec($ch);
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-// 关闭cURL
-curl_close($ch);
+// cURL 资源会在不再被引用时自动关闭，无需显式调用 curl_close()
 
 if ($http_code === 200) {
     // 解析响应

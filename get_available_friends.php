@@ -33,12 +33,6 @@ try {
     $user_id = $_SESSION['user_id'];
     $group_id = isset($_GET['group_id']) ? intval($_GET['group_id']) : 0;
 
-    // 验证数据
-    if (!$group_id) {
-        echo json_encode(['success' => false, 'message' => '请选择群聊']);
-        exit;
-    }
-
     // 检查数据库连接
     if (!$conn) {
         echo json_encode(['success' => false, 'message' => '数据库连接失败']);
@@ -49,31 +43,37 @@ try {
     $user = new User($conn);
     $group = new Group($conn);
 
-    // 检查用户是否是群聊成员
-    $stmt = $conn->prepare("SELECT id FROM group_members WHERE group_id = ? AND user_id = ?");
-    $stmt->execute([$group_id, $user_id]);
-    if (!$stmt->fetch()) {
-        echo json_encode(['success' => false, 'message' => '您不是该群聊成员']);
-        exit;
-    }
-
     // 获取用户的好友列表
     $stmt = $conn->prepare("SELECT u.* FROM users u
-                         JOIN friends f ON (u.id = f.user_id1 OR u.id = f.user_id2)
-                         WHERE (f.user_id1 = ? OR f.user_id2 = ?) AND u.id != ? AND f.status = 'accepted'");
-    $stmt->execute([$user_id, $user_id, $user_id]);
+                         JOIN friends f ON u.id = f.friend_id
+                         WHERE f.user_id = ? AND f.status = 'accepted' AND u.id != ?");
+    $stmt->execute([$user_id, $user_id]);
     $friends = $stmt->fetchAll();
 
-    // 获取群聊现有成员ID列表
-    $stmt = $conn->prepare("SELECT user_id FROM group_members WHERE group_id = ?");
-    $stmt->execute([$group_id]);
-    $group_members = $stmt->fetchAll();
-    $group_member_ids = array_column($group_members, 'user_id');
+    // 初始化可用好友数组
+    $available_friends = $friends;
 
-    // 过滤出不在群聊中的好友
-    $available_friends = array_filter($friends, function($friend) use ($group_member_ids) {
-        return !in_array($friend['id'], $group_member_ids);
-    });
+    // 如果提供了group_id，则过滤出不在群聊中的好友
+    if ($group_id) {
+        // 检查用户是否是群聊成员
+        $stmt = $conn->prepare("SELECT id FROM group_members WHERE group_id = ? AND user_id = ?");
+        $stmt->execute([$group_id, $user_id]);
+        if (!$stmt->fetch()) {
+            echo json_encode(['success' => false, 'message' => '您不是该群聊成员']);
+            exit;
+        }
+
+        // 获取群聊现有成员ID列表
+        $stmt = $conn->prepare("SELECT user_id FROM group_members WHERE group_id = ?");
+        $stmt->execute([$group_id]);
+        $group_members = $stmt->fetchAll();
+        $group_member_ids = array_column($group_members, 'user_id');
+
+        // 过滤出不在群聊中的好友
+        $available_friends = array_filter($friends, function($friend) use ($group_member_ids) {
+            return !in_array($friend['id'], $group_member_ids);
+        });
+    }
 
     echo json_encode(['success' => true, 'friends' => array_values($available_friends)]);
 } catch (Exception $e) {

@@ -50,10 +50,12 @@ try {
 
     // 获取新消息
     $stmt = $conn->prepare(
-        "SELECT * FROM messages 
-         WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) 
-         AND id > ? 
-         ORDER BY created_at ASC"
+        "SELECT m.*, u.username as sender_username, u.avatar 
+         FROM messages m 
+         JOIN users u ON m.sender_id = u.id
+         WHERE ((m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?)) 
+         AND m.id > ? 
+         ORDER BY m.created_at ASC"
     );
     $stmt->execute([$user_id, $friend_id, $friend_id, $user_id, $last_message_id]);
     $new_messages = $stmt->fetchAll();

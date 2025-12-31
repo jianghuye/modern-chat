@@ -1,15 +1,25 @@
 <?php
+require_once 'config.php';
 require_once 'db.php';
 
-// 获取用户IP地址
-function getUserIP() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-        return $_SERVER['HTTP_CLIENT_IP'];
-    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        return $_SERVER['HTTP_X_FORWARDED_FOR'];
-    } else {
-        return $_SERVER['REMOTE_ADDR'];
+// 确保scan_login表结构正确
+try {
+    // 检查scan_login表是否有browser_fingerprint字段
+    $stmt = $conn->prepare("SHOW COLUMNS FROM scan_login LIKE 'browser_fingerprint'");
+    $stmt->execute();
+    $browser_fingerprint_column_exists = $stmt->fetch();
+    
+    if (!$browser_fingerprint_column_exists) {
+        // 添加browser_fingerprint字段
+        $conn->exec("ALTER TABLE scan_login ADD COLUMN browser_fingerprint VARCHAR(100) NULL AFTER ip_address");
+        error_log("Added browser_fingerprint column to scan_login table");
     }
+    
+    // 更新status字段的枚举值，添加scanned和rejected状态
+    $conn->exec("ALTER TABLE scan_login MODIFY COLUMN status ENUM('pending', 'scanned', 'success', 'expired', 'used', 'rejected') DEFAULT 'pending'");
+    error_log("Updated scan_login status enum values");
+} catch (PDOException $e) {
+    error_log("Field setup error: " . $e->getMessage());
 }
 
 // 生成唯一的qid
@@ -17,8 +27,63 @@ function generateQid() {
     return uniqid('scan_', true) . rand(1000, 9999);
 }
 
+// 更新过期的IP封禁
+function updateExpiredIpBans($conn) {
+    try {
+        $stmt = $conn->prepare("UPDATE ip_bans SET status = 'expired' WHERE status = 'active' AND ban_end <= NOW()");
+        $stmt->execute();
+        return true;
+    } catch (PDOException $e) {
+        error_log("Update Expired IP Bans Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 检查IP是否被封禁
+function isIpBanned($conn, $ip_address) {
+    // 先更新过期的封禁
+    updateExpiredIpBans($conn);
+    
+    try {
+        $stmt = $conn->prepare("SELECT * FROM ip_bans WHERE ip_address = ? AND status = 'active'");
+        $stmt->execute([$ip_address]);
+        $ban = $stmt->fetch();
+        return $ban;
+    } catch (PDOException $e) {
+        error_log("Check IP Ban Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 更新过期的浏览器封禁
+function updateExpiredBrowserBans($conn) {
+    try {
+        $stmt = $conn->prepare("UPDATE browser_bans SET status = 'expired' WHERE status = 'active' AND ban_end <= NOW()");
+        $stmt->execute();
+        return true;
+    } catch (PDOException $e) {
+        error_log("Update Expired Browser Bans Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 检查浏览器指纹是否被封禁
+function isBrowserBanned($conn, $fingerprint) {
+    // 先更新过期的封禁
+    updateExpiredBrowserBans($conn);
+    
+    try {
+        $stmt = $conn->prepare("SELECT * FROM browser_bans WHERE fingerprint = ? AND status = 'active'");
+        $stmt->execute([$fingerprint]);
+        $ban = $stmt->fetch();
+        return $ban;
+    } catch (PDOException $e) {
+        error_log("Check Browser Ban Error: " . $e->getMessage());
+        return false;
+    }
+}
+
 // 主处理逻辑
-// 首先检查是否是检查登录状态的请求
 if (isset($_GET['check_status'])) {
     // 检查登录状态
     $qid = isset($_GET['qid']) ? $_GET['qid'] : '';
@@ -29,7 +94,6 @@ if (isset($_GET['check_status'])) {
     }
     
     try {
-        // 检查登录状态
         $sql = "SELECT * FROM scan_login WHERE qid = ?";
         $stmt = $conn->prepare($sql);
         $stmt->execute([$qid]);
@@ -40,63 +104,50 @@ if (isset($_GET['check_status'])) {
             exit;
         }
         
-        // 检查是否过期
         if (strtotime($scan_record['expire_at']) < time()) {
-            // 更新为过期状态
             $sql = "UPDATE scan_login SET status = 'expired' WHERE qid = ?";
             $stmt = $conn->prepare($sql);
             $stmt->execute([$qid]);
             echo json_encode(['status' => 'expired', 'message' => '二维码已过期']);
         } elseif ($scan_record['status'] === 'success') {
-            // 登录成功，生成临时token
             $user_id = $scan_record['user_id'];
-            // 生成唯一的token，有效期5分钟
             $token = bin2hex(random_bytes(32));
             $token_expire_at = date('Y-m-d H:i:s', strtotime('+5 minutes'));
             
-            // 更新记录状态为success并存储token
             $sql = "UPDATE scan_login SET status = 'success', token = ?, token_expire_at = ? WHERE qid = ?";
             $stmt = $conn->prepare($sql);
             $stmt->execute([$token, $token_expire_at, $qid]);
             
-            // 返回token而不是直接返回user_id
             echo json_encode(['status' => 'success', 'token' => $token, 'message' => '登录成功']);
-            
-            // 注意：这里只更新状态，不立即删除记录
-            // 实际删除在PC端登录成功后进行，确保PC端能获取到token
+        } elseif ($scan_record['status'] === 'scanned') {
+            echo json_encode(['status' => 'scanned', 'message' => '等待手机确认登录', 'debug' => '当前状态: ' . $scan_record['status']]);
+        } elseif ($scan_record['status'] === 'rejected') {
+            echo json_encode(['status' => 'rejected', 'message' => '手机端拒绝了登录请求，请重试']);
         } else {
-            // 等待扫描
             echo json_encode(['status' => 'pending', 'message' => '等待扫描', 'debug' => '当前状态: ' . $scan_record['status']]);
         }
     } catch(PDOException $e) {
         echo json_encode(['status' => 'error', 'message' => '检查登录状态失败: ' . $e->getMessage()]);
     }
-} 
-// 然后检查是否是POST请求（处理手机端登录）
-elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // 处理手机端登录请求
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $qid = isset($_POST['qid']) ? $_POST['qid'] : '';
+    $action = isset($_POST['action']) ? $_POST['action'] : '';
     $user = isset($_POST['user']) ? $_POST['user'] : '';
     $source = isset($_POST['source']) ? $_POST['source'] : '';
     
-    // 验证参数
-    if (empty($qid) || empty($user) || empty($source)) {
-        echo json_encode(['success' => false, 'message' => '参数错误: ' . $qid . ' ' . $user . ' ' . $source]);
+    if (empty($qid) || empty($source)) {
+        echo json_encode(['success' => false, 'message' => '参数错误: 缺少必要参数']);
         exit;
     }
     
-    // 验证来源是否为mobilechat.php
-    if ($source !== 'mobilechat.php') {
+    if (!in_array($source, ['mobilechat.php', 'Newchatmobile.php'])) {
         echo json_encode(['success' => false, 'message' => '非法请求来源: ' . $source]);
         exit;
     }
     
-    // 使用user参数作为用户名
-    $username = $user;
-    
     try {
         // 检查二维码是否存在且未过期
-        $sql = "SELECT * FROM scan_login WHERE qid = ? AND status = 'pending' AND expire_at > NOW()";
+        $sql = "SELECT * FROM scan_login WHERE qid = ? AND expire_at > NOW()";
         $stmt = $conn->prepare($sql);
         $stmt->execute([$qid]);
         $scan_record = $stmt->fetch();
@@ -106,52 +157,80 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
         
-        // 获取用户ID
-        $sql = "SELECT id FROM users WHERE username = ?";
-        $stmt = $conn->prepare($sql);
-        $stmt->execute([$username]);
-        $user_data = $stmt->fetch();
-        
-        if (!$user_data) {
-            echo json_encode(['success' => false, 'message' => '用户不存在: ' . $username]);
-            exit;
+        // 处理扫描动作（更新状态为scanned）
+        if ($action === 'scan') {
+            $sql = "UPDATE scan_login SET status = 'scanned' WHERE qid = ?";
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([$qid]);
+            echo json_encode(['success' => true, 'message' => '扫描状态更新成功']);
         }
-        
-        $user_id = $user_data['id'];
-        
-        // 更新扫码登录状态
+        // 处理拒绝登录动作（更新状态为rejected）
+        elseif ($action === 'reject') {
+            $sql = "UPDATE scan_login SET status = 'rejected' WHERE qid = ?";
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([$qid]);
+            echo json_encode(['success' => true, 'message' => '已拒绝登录请求']);
+        }
+        // 处理登录动作（更新状态为success）
+        else {
+            if (empty($user)) {
+                echo json_encode(['success' => false, 'message' => '参数错误: 缺少用户名']);
+                exit;
+            }
+            
+            $username = $user;
+            
+            // 获取用户ID
+            $sql = "SELECT id FROM users WHERE username = ?";
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([$username]);
+            $user_data = $stmt->fetch();
+            
+            if (!$user_data) {
+                echo json_encode(['success' => false, 'message' => '用户不存在: ' . $username]);
+                exit;
+            }
+            
+            $user_id = $user_data['id'];
+            
             $sql = "UPDATE scan_login SET status = 'success', user_id = ?, login_source = ? WHERE qid = ?";
             $stmt = $conn->prepare($sql);
             $stmt->execute([$user_id, $source, $qid]);
             
             echo json_encode(['success' => true, 'message' => '登录成功', 'debug' => 'qid: ' . $qid . ', user: ' . $user . ', user_id: ' . $user_id]);
-            
-            // 移动端确认登录后删除数据库记录，避免重复使用
-            // 注意：这里只更新状态，实际删除在PC端登录成功后进行
-            // 这样确保PC端能获取到token
+        }
     } catch(PDOException $e) {
-        echo json_encode(['success' => false, 'message' => '登录失败: ' . $e->getMessage()]);
+        echo json_encode(['success' => false, 'message' => '操作失败: ' . $e->getMessage()]);
     }
-} 
-// 最后检查是否是生成二维码的GET请求
-elseif ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    // 生成二维码和qid
+} elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['qid'])) {
     $qid = generateQid();
     $ip_address = getUserIP();
+    $browser_fingerprint = isset($_GET['browser_fingerprint']) ? $_GET['browser_fingerprint'] : '';
     $expire_at = date('Y-m-d H:i:s', strtotime('+5 minutes'));
     
     try {
-        // 插入数据库
-        $sql = "INSERT INTO scan_login (qid, expire_at, ip_address, status) VALUES (?, ?, ?, 'pending')";
-        $stmt = $conn->prepare($sql);
-        $stmt->execute([$qid, $expire_at, $ip_address]);
+        $ip_ban_info = isIpBanned($conn, $ip_address);
+        if ($ip_ban_info) {
+            echo json_encode(['success' => false, 'message' => '当前IP地址已被封禁，无法生成登录二维码']);
+            exit;
+        }
         
-        // 生成二维码内容（临时链接）
+        if (!empty($browser_fingerprint)) {
+            $browser_ban_info = isBrowserBanned($conn, $browser_fingerprint);
+            if ($browser_ban_info) {
+                echo json_encode(['success' => false, 'message' => '当前浏览器已被封禁，无法生成登录二维码']);
+                exit;
+            }
+        }
+        
+        $sql = "INSERT INTO scan_login (qid, expire_at, ip_address, status, browser_fingerprint) VALUES (?, ?, ?, 'pending', ?)";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute([$qid, $expire_at, $ip_address, $browser_fingerprint]);
+        
         $domain = $_SERVER['HTTP_HOST'];
         $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
         $qr_content = "$protocol://$domain/chat/scan_login.php?qid=$qid";
         
-        // 返回qid和二维码内容
         $response = [
             'success' => true,
             'qid' => $qid,
@@ -162,8 +241,28 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET') {
     } catch(PDOException $e) {
         echo json_encode(['success' => false, 'message' => '生成登录二维码失败']);
     }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['qid'])) {
+    $qid = $_GET['qid'];
+    $browser_fingerprint = isset($_GET['browser_fingerprint']) ? $_GET['browser_fingerprint'] : '';
+    
+    try {
+        if (!empty($browser_fingerprint)) {
+            $browser_ban_info = isBrowserBanned($conn, $browser_fingerprint);
+            if ($browser_ban_info) {
+                echo "<h1>登录失败</h1><p>当前浏览器已被封禁，无法登录</p>";
+                exit;
+            }
+        }
+        
+        $domain = $_SERVER['HTTP_HOST'];
+        $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
+        header("Location: $protocol://$domain/chat/mobilechat.php?action=scan_login&qid=$qid");
+        exit;
+    } catch(PDOException $e) {
+        echo "<h1>错误</h1><p>处理登录请求失败</p>";
+        exit;
+    }
 } else {
-    // 其他请求返回错误
     echo json_encode(['success' => false, 'message' => '非法访问']);
 }
 ?>

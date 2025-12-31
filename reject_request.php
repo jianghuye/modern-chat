@@ -1,11 +1,14 @@
 <?php
+// 启动会话
+session_start();
+
 require_once 'config.php';
 require_once 'db.php';
 require_once 'Friend.php';
 
 // 检查用户是否登录
 if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php');
+    echo json_encode(['success' => false, 'message' => '用户未登录']);
     exit;
 }
 
@@ -13,7 +16,7 @@ $user_id = $_SESSION['user_id'];
 $request_id = isset($_GET['request_id']) ? intval($_GET['request_id']) : 0;
 
 if (!$request_id) {
-    header('Location: chat.php?error=' . urlencode('无效的请求ID'));
+    echo json_encode(['success' => false, 'message' => '无效的请求ID']);
     exit;
 }
 
@@ -23,9 +26,7 @@ $friend = new Friend($conn);
 // 拒绝好友请求
 $result = $friend->rejectFriendRequest($user_id, $request_id);
 
-if ($result['success']) {
-    header('Location: chat.php?success=' . urlencode($result['message']));
-} else {
-    header('Location: chat.php?error=' . urlencode($result['message']));
-}
+// 返回JSON响应
+header('Content-Type: application/json');
+echo json_encode($result);
 exit;

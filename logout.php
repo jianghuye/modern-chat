@@ -1,4 +1,9 @@
 <?php
+// 开始会话
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once 'config.php';
 require_once 'db.php';
 require_once 'User.php';
@@ -18,6 +23,14 @@ if (isset($_SESSION['user_id'])) {
     session_destroy();
 }
 
-// 重定向到登录页面
-header('Location: login.php');
-exit;
+// 检查请求方法
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // 返回JSON响应
+    header('Content-Type: application/json');
+    echo json_encode(['success' => true, 'message' => '退出登录成功']);
+    exit;
+} else {
+    // 重定向到登录页面
+    header('Location: login.php');
+    exit;
+}

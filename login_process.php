@@ -37,15 +37,10 @@ try {
     error_log("Field setup error: " . $e->getMessage());
 }
 
-// 获取客户端IP地址
+// 使用config.php中定义的getUserIP()函数获取客户端IP地址
+// 这里使用别名函数，保持与现有代码的兼容性
 function getClientIP() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-        return $_SERVER['HTTP_CLIENT_IP'];
-    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        return $_SERVER['HTTP_X_FORWARDED_FOR'];
-    } else {
-        return $_SERVER['REMOTE_ADDR'];
-    }
+    return getUserIP();
 }
 
 // 记录登录尝试
@@ -103,12 +98,12 @@ function calculateBanDuration($conn, $ip_address) {
             $next_duration = min($last_ban['ban_duration'] * 2, 30 * 24 * 60 * 60);
             return [$next_duration, $last_ban['id']];
         } else {
-            // 第一次封禁，24小时
-            return [24 * 60 * 60, null];
+            // 第一次封禁，使用配置的默认时长
+            return [DEFAULT_BAN_DURATION, null];
         }
     } catch (PDOException $e) {
         error_log("Calculate Ban Duration Error: " . $e->getMessage());
-        return [24 * 60 * 60, null]; // 默认24小时
+        return [DEFAULT_BAN_DURATION, null]; // 默认使用配置的封禁时长
     }
 }
 
@@ -132,11 +127,113 @@ function banIpAddress($conn, $ip_address) {
     }
 }
 
+// 更新过期的浏览器封禁
+function updateExpiredBrowserBans($conn) {
+    try {
+        $stmt = $conn->prepare("UPDATE browser_bans SET status = 'expired' WHERE status = 'active' AND ban_end <= NOW()");
+        $stmt->execute();
+        return true;
+    } catch (PDOException $e) {
+        error_log("Update Expired Browser Bans Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 检查浏览器是否被封禁
+function isBrowserBanned($conn, $fingerprint) {
+    // 先更新过期的封禁
+    updateExpiredBrowserBans($conn);
+    
+    try {
+        $stmt = $conn->prepare("SELECT * FROM browser_bans WHERE fingerprint = ? AND status = 'active'");
+        $stmt->execute([$fingerprint]);
+        $ban = $stmt->fetch();
+        return $ban;
+    } catch (PDOException $e) {
+        error_log("Check Browser Ban Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 计算浏览器下一次封禁时长
+function calculateBrowserBanDuration($conn, $fingerprint) {
+    try {
+        // 获取该浏览器指纹的上一次封禁记录
+        $stmt = $conn->prepare("SELECT ban_duration, id FROM browser_bans WHERE fingerprint = ? AND status = 'expired' ORDER BY ban_end DESC LIMIT 1");
+        $stmt->execute([$fingerprint]);
+        $last_ban = $stmt->fetch();
+        
+        if ($last_ban) {
+            // 上一次封禁时长的2倍，最长不超过30天
+            $next_duration = min($last_ban['ban_duration'] * 2, 30 * 24 * 60 * 60);
+            return [$next_duration, $last_ban['id']];
+        } else {
+            // 第一次封禁，使用配置的默认时长
+            return [DEFAULT_BAN_DURATION, null];
+        }
+    } catch (PDOException $e) {
+        error_log("Calculate Browser Ban Duration Error: " . $e->getMessage());
+        return [DEFAULT_BAN_DURATION, null]; // 默认使用配置的封禁时长
+    }
+}
+
+// 封禁浏览器指纹
+function banBrowserFingerprint($conn, $fingerprint) {
+    try {
+        // 计算封禁时长
+        list($ban_duration, $last_ban_id) = calculateBrowserBanDuration($conn, $fingerprint);
+        
+        // 计算封禁结束时间
+        $ban_end = date('Y-m-d H:i:s', time() + $ban_duration);
+        
+        // 封禁浏览器指纹
+        $stmt = $conn->prepare("INSERT INTO browser_bans (fingerprint, ban_duration, ban_end, last_ban_id) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$fingerprint, $ban_duration, $ban_end, $last_ban_id]);
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Ban Browser Fingerprint Error: " . $e->getMessage());
+        return false;
+    }
+}
+
+// 记录浏览器指纹信息
+function logBrowserFingerprint($conn, $fingerprint, $ip_address, $user_agent) {
+    try {
+        // 检查指纹是否已存在
+        $stmt = $conn->prepare("SELECT id FROM browser_fingerprints WHERE fingerprint = ?");
+        $stmt->execute([$fingerprint]);
+        $existing = $stmt->fetch();
+        
+        if ($existing) {
+            // 更新现有记录
+            $stmt = $conn->prepare("UPDATE browser_fingerprints SET last_seen = NOW(), ip_address = ? WHERE fingerprint = ?");
+            $stmt->execute([$ip_address, $fingerprint]);
+        } else {
+            // 插入新记录
+            $screen_resolution = isset($_POST['screen_resolution']) ? $_POST['screen_resolution'] : '';
+            $time_zone = isset($_POST['time_zone']) ? $_POST['time_zone'] : '';
+            $language = isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? substr($_SERVER['HTTP_ACCEPT_LANGUAGE'], 0, 50) : '';
+            
+            // 计算插件数量（简化处理）
+            $plugins_count = 0;
+            
+            $stmt = $conn->prepare("INSERT INTO browser_fingerprints (fingerprint, ip_address, user_agent, screen_resolution, time_zone, language, plugins_count) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$fingerprint, $ip_address, $user_agent, $screen_resolution, $time_zone, $language, $plugins_count]);
+        }
+        
+        return true;
+    } catch (PDOException $e) {
+        error_log("Log Browser Fingerprint Error: " . $e->getMessage());
+        return false;
+    }
+}
+
 // 检查IP的失败登录尝试次数
 function checkFailedLoginAttempts($conn, $ip_address) {
     try {
-        // 检查5分钟内的失败登录尝试次数
-        $stmt = $conn->prepare("SELECT COUNT(*) as count FROM ip_login_attempts WHERE ip_address = ? AND is_successful = 0 AND attempt_time >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
+        // 检查1小时内的失败登录尝试次数
+        $stmt = $conn->prepare("SELECT COUNT(*) as count FROM ip_login_attempts WHERE ip_address = ? AND is_successful = 0 AND attempt_time >= DATE_SUB(NOW(), INTERVAL 1 HOUR)");
         $stmt->execute([$ip_address]);
         $result = $stmt->fetch();
         
@@ -154,6 +251,17 @@ $user = new User($conn);
 
 // 获取客户端IP地址
 $client_ip = getClientIP();
+
+// 获取浏览器指纹
+$browser_fingerprint = isset($_POST['browser_fingerprint']) ? $_POST['browser_fingerprint'] : '';
+
+// 获取用户代理
+$user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
+
+// 记录浏览器指纹信息（如果有）
+if (!empty($browser_fingerprint)) {
+    logBrowserFingerprint($conn, $browser_fingerprint, $client_ip, $user_agent);
+}
 
 // 检查IP是否被封禁
 $ban_info = isIpBanned($conn, $client_ip);
@@ -181,6 +289,34 @@ if ($ban_info) {
     exit;
 }
 
+// 检查浏览器指纹是否被封禁
+if (!empty($browser_fingerprint)) {
+    $browser_ban_info = isBrowserBanned($conn, $browser_fingerprint);
+    if ($browser_ban_info) {
+        // 浏览器被封禁，计算剩余封禁时间
+        $ban_end = new DateTime($browser_ban_info['ban_end']);
+        $now = new DateTime();
+        $remaining = $now->diff($ban_end);
+        
+        $error_message = "您的浏览器已被封禁，剩余封禁时间：";
+        if ($remaining->d > 0) {
+            $error_message .= $remaining->d . "天";
+        }
+        if ($remaining->h > 0) {
+            $error_message .= $remaining->h . "小时";
+        }
+        if ($remaining->i > 0) {
+            $error_message .= $remaining->i . "分钟";
+        }
+        if ($remaining->s > 0) {
+            $error_message .= $remaining->s . "秒";
+        }
+        
+        header("Location: login.php?error=" . urlencode($error_message));
+        exit;
+    }
+}
+
 // 处理扫码登录
 if (isset($_GET['scan_login']) && isset($_GET['token'])) {
     // 扫码登录逻辑，使用token验证
@@ -206,6 +342,43 @@ if (isset($_GET['scan_login']) && isset($_GET['token'])) {
                     $ban_message = "您的账号已被封禁，原因：{$ban_info['reason']}，预计解封时间：{$ban_info['expires_at']}，如有疑问请联系管理员";
                     header("Location: login.php?error=" . urlencode($ban_message));
                     exit;
+                }
+                
+                // 从扫码记录中获取浏览器指纹
+                $scan_browser_fingerprint = $scan_record['browser_fingerprint'];
+                
+                // 合并浏览器指纹（优先使用请求中的，否则使用扫码记录中的）
+                $browser_fingerprint = isset($_POST['browser_fingerprint']) ? $_POST['browser_fingerprint'] : $scan_browser_fingerprint;
+                
+                // 检查浏览器指纹是否被封禁
+                if (!empty($browser_fingerprint)) {
+                    $browser_ban_info = isBrowserBanned($conn, $browser_fingerprint);
+                    if ($browser_ban_info) {
+                        // 浏览器被封禁，计算剩余封禁时间
+                        $ban_end = new DateTime($browser_ban_info['ban_end']);
+                        $now = new DateTime();
+                        $remaining = $now->diff($ban_end);
+                        
+                        $error_message = "您的浏览器已被封禁，剩余封禁时间：";
+                        if ($remaining->d > 0) {
+                            $error_message .= $remaining->d . "天";
+                        }
+                        if ($remaining->h > 0) {
+                            $error_message .= $remaining->h . "小时";
+                        }
+                        if ($remaining->i > 0) {
+                            $error_message .= $remaining->i . "分钟";
+                        }
+                        if ($remaining->s > 0) {
+                            $error_message .= $remaining->s . "秒";
+                        }
+                        
+                        header("Location: login.php?error=" . urlencode($error_message));
+                        exit;
+                    }
+                    
+                    // 记录浏览器指纹信息
+                    logBrowserFingerprint($conn, $browser_fingerprint, $client_ip, $user_agent);
                 }
                 
                 // 登录成功，将用户信息存储在会话中
@@ -308,6 +481,13 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = trim($_POST['email']);
     $password = $_POST['password'];
     
+    // 获取极验4.0验证码验证结果
+    $lot_number = isset($_POST['geetest_challenge']) ? $_POST['geetest_challenge'] : '';
+    $captcha_output = isset($_POST['geetest_validate']) ? $_POST['geetest_validate'] : '';
+    $pass_token = isset($_POST['geetest_seccode']) ? $_POST['geetest_seccode'] : '';
+    $gen_time = isset($_POST['gen_time']) ? $_POST['gen_time'] : '';
+    $captcha_id = isset($_POST['captcha_id']) ? $_POST['captcha_id'] : '';
+    
     // 验证表单数据
     $errors = [];
     
@@ -317,6 +497,63 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (empty($password)) {
         $errors[] = '请输入密码';
+    }
+    
+    // 极验4.0验证码验证
+    if (empty($lot_number) || empty($captcha_output) || empty($pass_token) || empty($gen_time) || empty($captcha_id)) {
+        $errors[] = '请完成验证码验证';
+    } else {
+        // 调用极验服务器端API验证
+        $captchaId = '55574dfff9c40f2efeb5a26d6d188245';
+        $captchaKey = 'e69583b3ddcc2b114388b5e1dc213cfd';
+        
+        // 生成签名
+        $sign_token = hash_hmac('sha256', $lot_number, $captchaKey);
+        
+        $apiUrl = 'http://gcaptcha4.geetest.com/validate?captcha_id=' . urlencode($captchaId);
+        $params = [
+            'lot_number' => $lot_number,
+            'captcha_output' => $captcha_output,
+            'pass_token' => $pass_token,
+            'gen_time' => $gen_time,
+            'sign_token' => $sign_token
+        ];
+        
+        // 使用curl发送验证请求
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $apiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10); // 设置超时时间为10秒
+        
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        
+        // 调试信息，记录到日志
+        error_log("Geetest 4.0 validation - URL: $apiUrl");
+        error_log("Geetest 4.0 validation - Params: " . json_encode($params));
+        error_log("Geetest 4.0 validation - HTTP Code: $http_code");
+        error_log("Geetest 4.0 validation - Response: $response");
+        
+        // curl_close is deprecated in PHP 8.0+, no need to explicitly close the handle
+        
+        // 检查响应
+        if ($http_code === 200) {
+            $result = json_decode($response, true);
+            error_log("Geetest 4.0 validation - Decoded Result: " . json_encode($result));
+            
+            if ($result && $result['status'] === 'success' && $result['result'] === 'success') {
+                // 验证成功
+            } else {
+                $errors[] = '验证码验证失败，请重试';
+                $reason = isset($result['reason']) ? $result['reason'] : 'unknown';
+                error_log("Geetest 4.0 validation failed - Result: " . json_encode($result) . ", Reason: $reason");
+            }
+        } else {
+            // API请求失败，暂时跳过验证（可能是网络问题）
+            error_log("Geetest 4.0 API request failed - HTTP Code: $http_code, Response: $response");
+        }
     }
     
     // 如果有错误，重定向回登录页面
@@ -419,7 +656,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$user_id]);
             }
         } catch (PDOException $e) {
-            error_log("Check feedback status error: " . $e->getMessage());
+            error_log("Check feedback status error: " . $e->getMessage()); 
         }
         
         // 重定向到聊天页面
@@ -431,12 +668,24 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         // 检查失败尝试次数
         $failed_attempts = checkFailedLoginAttempts($conn, $client_ip);
-        if ($failed_attempts >= 10) {
+        if ($failed_attempts >= MAX_LOGIN_ATTEMPTS) {
             // 封禁IP
             banIpAddress($conn, $client_ip);
             
+            // 封禁浏览器指纹（如果有）
+            if (!empty($browser_fingerprint)) {
+                banBrowserFingerprint($conn, $browser_fingerprint);
+            }
+            
+            // 计算封禁时长
+            list($ban_duration, $last_ban_id) = calculateBanDuration($conn, $client_ip);
+            
+            // 转换封禁时长为可读格式
+            $hours = ceil($ban_duration / 3600);
+            $ban_message = "登录失败次数过多，您的IP地址和浏览器已被封禁 {$hours} 小时";
+            
             // 重定向到登录页面并显示封禁信息
-            header("Location: login.php?error=" . urlencode('登录失败次数过多，您的IP地址已被封禁24小时'));
+            header("Location: login.php?error=" . urlencode($ban_message));
             exit;
         }
         

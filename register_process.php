@@ -10,16 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 // 获取用户IP地址
-function getUserIP() {
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-        return $_SERVER['HTTP_CLIENT_IP'];
-    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        return $_SERVER['HTTP_X_FORWARDED_FOR'];
-    } else {
-        return $_SERVER['REMOTE_ADDR'];
-    }
-}
-
+// 使用config.php中定义的getUserIP()函数
 $user_ip = getUserIP();
 
 // 检查是否启用了IP注册限制
@@ -80,6 +71,67 @@ if ($password !== $confirm_password) {
     $errors[] = '两次输入的密码不一致';
 }
 
+// 极验4.0验证码验证
+$lot_number = isset($_POST['geetest_challenge']) ? $_POST['geetest_challenge'] : '';
+$captcha_output = isset($_POST['geetest_validate']) ? $_POST['geetest_validate'] : '';
+$pass_token = isset($_POST['geetest_seccode']) ? $_POST['geetest_seccode'] : '';
+$gen_time = isset($_POST['gen_time']) ? $_POST['gen_time'] : '';
+$captcha_id = isset($_POST['captcha_id']) ? $_POST['captcha_id'] : '';
+
+if (empty($lot_number) || empty($captcha_output) || empty($pass_token) || empty($gen_time) || empty($captcha_id)) {
+    $errors[] = '请完成验证码验证';
+} else {
+    // 调用极验服务器端API验证
+    $captchaId = '55574dfff9c40f2efeb5a26d6d188245';
+    $captchaKey = 'e69583b3ddcc2b114388b5e1dc213cfd';
+    
+    // 生成签名
+    $sign_token = hash_hmac('sha256', $lot_number, $captchaKey);
+    
+    $apiUrl = 'http://gcaptcha4.geetest.com/validate?captcha_id=' . urlencode($captchaId);
+    $params = [
+        'lot_number' => $lot_number,
+        'captcha_output' => $captcha_output,
+        'pass_token' => $pass_token,
+        'gen_time' => $gen_time,
+        'sign_token' => $sign_token
+    ];
+    
+    // 使用curl发送验证请求
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $apiUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10); // 设置超时时间为10秒
+    
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    
+    // 调试信息，记录到日志
+    error_log("Geetest 4.0 validation - URL: $apiUrl");
+    error_log("Geetest 4.0 validation - Params: " . json_encode($params));
+    error_log("Geetest 4.0 validation - HTTP Code: $http_code");
+    error_log("Geetest 4.0 validation - Response: $response");
+    
+    // 检查响应
+    if ($http_code === 200) {
+        $result = json_decode($response, true);
+        error_log("Geetest 4.0 validation - Decoded Result: " . json_encode($result));
+        
+        if ($result && $result['status'] === 'success' && $result['result'] === 'success') {
+            // 验证成功
+        } else {
+            $errors[] = '验证码验证失败，请重试';
+            $reason = isset($result['reason']) ? $result['reason'] : 'unknown';
+            error_log("Geetest 4.0 validation failed - Result: " . json_encode($result) . ", Reason: $reason");
+        }
+    } else {
+        // API请求失败，暂时跳过验证（可能是网络问题）
+        error_log("Geetest 4.0 API request failed - HTTP Code: $http_code, Response: $response");
+    }
+}
+
 // 如果有错误，重定向回注册页面
 if (!empty($errors)) {
     $error_message = implode('<br>', $errors);
@@ -138,8 +190,7 @@ if ($email_verify) {
             $response = curl_exec($ch);
             $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             
-            // 关闭cURL
-            curl_close($ch);
+            // cURL 资源会在不再被引用时自动关闭，无需显式调用 curl_close()
             
             if ($http_code === 200) {
                 // 解析响应

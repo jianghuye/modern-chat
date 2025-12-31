@@ -69,9 +69,24 @@ try {
     // 创建Group实例
     $group = new Group($conn);
 
-    // 验证用户是群成员
-    $member_role = $group->getMemberRole($group_id, $user_id);
-    if (!$member_role) {
+    // 验证用户是群成员或群聊是全员群聊
+    $is_member = false;
+    
+    // 检查是否是全员群聊
+    $stmt = $conn->prepare("SELECT all_user_group FROM groups WHERE id = ?");
+    $stmt->execute([$group_id]);
+    $group_info = $stmt->fetch();
+    
+    if ($group_info && $group_info['all_user_group'] == 1) {
+        // 全员群聊，所有用户都可以访问
+        $is_member = true;
+    } else {
+        // 普通群聊，检查用户是否是群成员
+        $member_role = $group->getMemberRole($group_id, $user_id);
+        $is_member = $member_role !== false;
+    }
+    
+    if (!$is_member) {
         echo json_encode(['success' => false, 'message' => '您不是该群聊的成员']);
         exit;
     }
@@ -82,16 +97,28 @@ try {
     // 获取群聊信息
     $group_info = $group->getGroupInfo($group_id);
     
-    // 处理成员数据，添加角色信息
+    // 处理成员数据，添加角色信息和好友状态
     $processed_members = [];
     foreach ($members as $member) {
+        // 检查当前用户与该成员的好友关系
+        $friendship_status = 'none';
+        if ($member['id'] != $user_id) {
+            $stmt = $conn->prepare("SELECT status FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)");
+            $stmt->execute([$user_id, $member['id'], $member['id'], $user_id]);
+            $friendship = $stmt->fetch();
+            if ($friendship) {
+                $friendship_status = $friendship['status'];
+            }
+        }
+        
         $processed_members[] = [
             'id' => $member['id'],
             'username' => $member['username'],
             'email' => $member['email'],
             'avatar' => $member['avatar'],
             'is_admin' => $member['is_admin'],
-            'is_owner' => $member['id'] == $group_info['owner_id']
+            'is_owner' => $member['id'] == $group_info['owner_id'],
+            'friendship_status' => $friendship_status
         ];
     }
 
@@ -99,6 +126,7 @@ try {
     $max_members = 2000;
 
     // 获取当前用户的角色信息
+    $member_role = $group->getMemberRole($group_id, $user_id);
     $current_user_role = [
         'is_owner' => $user_id == $group_info['owner_id'],
         'is_admin' => $member_role['is_admin']
@@ -109,7 +137,10 @@ try {
         'members' => $processed_members,
         'max_members' => $max_members,
         'is_owner' => $current_user_role['is_owner'],
-        'is_admin' => $current_user_role['is_admin']
+        'is_admin' => $current_user_role['is_admin'],
+        'current_user_id' => $user_id,
+        'group_owner_id' => $group_info['owner_id'],
+        'all_user_group' => $group_info['all_user_group']
     ]);
 } catch (Exception $e) {
     // 捕获所有异常并返回错误信息

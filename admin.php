@@ -81,6 +81,74 @@ $user = new User($conn);
 $group = new Group($conn);
 $message = new Message($conn);
 
+// 加载违禁词配置
+$prohibited_words_config = [];
+$prohibited_words_file = 'config/Prohibited_word.json';
+$prohibited_words_txt_file = 'config/Prohibited_word.txt';
+
+// 确保JSON配置文件存在并包含必要的配置项
+if (file_exists($prohibited_words_file)) {
+    $prohibited_words_config = json_decode(file_get_contents($prohibited_words_file), true);
+} else {
+    // 创建默认配置
+    $prohibited_words_config = [
+        'max_warnings_per_day' => 10,
+        'ban_time' => 24,
+        'max_ban_time' => 30,
+        'permanent_ban_days' => 365
+    ];
+    file_put_contents($prohibited_words_file, json_encode($prohibited_words_config, JSON_PRETTY_PRINT));
+}
+
+// 加载违禁词列表（从txt文件）
+$prohibited_words = [];
+if (file_exists($prohibited_words_txt_file)) {
+    $prohibited_words = file($prohibited_words_txt_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    // 去重
+    $prohibited_words = array_unique($prohibited_words);
+    // 重新排序
+    sort($prohibited_words);
+}
+
+// 获取违禁词统计数据
+$ban_stats = [
+    'today_warnings' => 0,
+    'today_bans' => 0,
+    'total_warnings' => 0,
+    'total_bans' => 0
+];
+
+try {
+    // 今日警告次数
+    $today = date('Y-m-d');
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM warnings WHERE created_at >= ?");
+    $stmt->execute([$today . ' 00:00:00']);
+    $ban_stats['today_warnings'] = $stmt->fetch()['count'];
+    
+    // 今日封禁人数
+    $stmt = $conn->prepare("SELECT COUNT(DISTINCT user_id) as count FROM bans WHERE ban_start >= ?");
+    $stmt->execute([$today . ' 00:00:00']);
+    $ban_stats['today_bans'] = $stmt->fetch()['count'];
+    
+    // 累计警告次数
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM warnings");
+    $stmt->execute();
+    $ban_stats['total_warnings'] = $stmt->fetch()['count'];
+    
+    // 累计封禁人数
+    $stmt = $conn->prepare("SELECT COUNT(DISTINCT user_id) as count FROM bans");
+    $stmt->execute();
+    $ban_stats['total_bans'] = $stmt->fetch()['count'];
+} catch (PDOException $e) {
+    error_log("Get ban stats error: " . $e->getMessage());
+}
+
+// 保存违禁词列表到txt文件
+function saveProhibitedWords($words, $file_path) {
+    $content = implode("\n", $words);
+    file_put_contents($file_path, $content);
+}
+
 // 获取当前用户信息
 if (!isset($_SESSION['user_id'])) {
     header('Location: login.php?error=请先登录管理员账号。');
@@ -101,27 +169,120 @@ if (!(isset($current_user['is_admin']) && $current_user['is_admin']) && !((isset
     exit;
 }
 
+// 处理违禁词管理操作
+if (isset($_POST['action']) && in_array($_POST['action'], [
+    'add_prohibited_word',
+    'update_prohibited_word_config'
+])) {
+    $action = $_POST['action'];
+    $password = isset($_POST['password']) ? $_POST['password'] : '';
+    
+    // 验证管理员密码
+    if (!validateAdminPassword($password, $current_user, $conn)) {
+        header('Location: admin.php?error=密码错误，操作失败');
+        exit;
+    }
+    
+    try {
+        switch ($action) {
+            case 'add_prohibited_word':
+                $new_word = isset($_POST['new_word']) ? trim($_POST['new_word']) : '';
+                if (empty($new_word)) {
+                    header('Location: admin.php?error=违禁词不能为空');
+                    exit;
+                }
+                
+                // 添加新违禁词
+                if (!in_array($new_word, $prohibited_words)) {
+                    $prohibited_words[] = $new_word;
+                    // 排序并去重
+                    $prohibited_words = array_unique($prohibited_words);
+                    sort($prohibited_words);
+                    // 保存到txt文件
+                    saveProhibitedWords($prohibited_words, $prohibited_words_txt_file);
+                    header('Location: admin.php?success=违禁词添加成功');
+                } else {
+                    header('Location: admin.php?error=违禁词已存在');
+                }
+                break;
+                
+            case 'update_prohibited_word_config':
+                $max_warnings = isset($_POST['max_warnings']) ? intval($_POST['max_warnings']) : 10;
+                $ban_time = isset($_POST['ban_time']) ? intval($_POST['ban_time']) : 24;
+                $max_ban_time = isset($_POST['max_ban_time']) ? intval($_POST['max_ban_time']) : 30;
+                $permanent_ban_days = isset($_POST['permanent_ban_days']) ? intval($_POST['permanent_ban_days']) : 365;
+                
+                // 更新配置
+                $prohibited_words_config['max_warnings_per_day'] = $max_warnings;
+                $prohibited_words_config['ban_time'] = $ban_time;
+                $prohibited_words_config['max_ban_time'] = $max_ban_time;
+                $prohibited_words_config['permanent_ban_days'] = $permanent_ban_days;
+                
+                file_put_contents($prohibited_words_file, json_encode($prohibited_words_config, JSON_PRETTY_PRINT));
+                header('Location: admin.php?success=违禁词配置更新成功');
+                break;
+        }
+        exit;
+    } catch (Exception $e) {
+        header('Location: admin.php?error=操作失败: ' . $e->getMessage());
+        exit;
+    }
+}
+
 // 直接获取所有群聊，不依赖Group类的getAllGroups()方法
 try {
+    // 检查groups表是否有all_user_group字段
+    $stmt = $conn->prepare("SHOW COLUMNS FROM groups LIKE 'all_user_group'");
+    $stmt->execute();
+    $column_exists = $stmt->fetch();
+    
+    if (!$column_exists) {
+        // 添加all_user_group字段
+        $conn->exec("ALTER TABLE groups ADD COLUMN all_user_group INT DEFAULT 0 AFTER owner_id");
+        error_log("Added all_user_group column to groups table");
+    }
+    
+    // 获取所有用户数量，用于全员群聊的成员统计
+    $user_count_stmt = $conn->prepare("SELECT COUNT(*) as total_users FROM users");
+    $user_count_stmt->execute();
+    $total_users = $user_count_stmt->fetch()['total_users'];
+    
     $stmt = $conn->prepare("SELECT g.*, 
                                         u1.username as creator_username, 
                                         u2.username as owner_username,
                                         (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
-                                 FROM `groups` g
+                                 FROM groups g
                                  JOIN users u1 ON g.creator_id = u1.id
                                  JOIN users u2 ON g.owner_id = u2.id
                                  ORDER BY g.created_at DESC");
     $stmt->execute();
     $all_groups = $stmt->fetchAll();
+    
+    // 对全员群聊，修正成员数量为所有用户数量
+    foreach ($all_groups as &$group) {
+        if (isset($group['all_user_group']) && $group['all_user_group'] == 1) {
+            $group['member_count'] = $total_users;
+        }
+    }
 } catch (PDOException $e) {
     error_log("Get All Groups Error: " . $e->getMessage());
     $all_groups = [];
 }
 
-// 直接获取所有用户，不依赖User类的getAllUsers()方法
+// 直接获取所有用户，支持搜索功能
 try {
-    $stmt = $conn->prepare("SELECT * FROM users ORDER BY created_at DESC");
-    $stmt->execute();
+    $search_term = isset($_GET['search']) ? $_GET['search'] : '';
+    
+    if (!empty($search_term)) {
+        // 添加搜索条件，匹配用户名或邮箱
+        $stmt = $conn->prepare("SELECT * FROM users WHERE username LIKE ? OR email LIKE ? ORDER BY created_at DESC");
+        $search_pattern = "%" . $search_term . "%";
+        $stmt->execute([$search_pattern, $search_pattern]);
+    } else {
+        // 没有搜索条件，获取所有用户
+        $stmt = $conn->prepare("SELECT * FROM users ORDER BY created_at DESC");
+        $stmt->execute();
+    }
     $all_users = $stmt->fetchAll();
 } catch (PDOException $e) {
     error_log("Get All Users Error: " . $e->getMessage());
@@ -135,7 +296,7 @@ try {
                                         g.name as group_name
                                  FROM group_messages gm
                                  JOIN users u ON gm.sender_id = u.id
-                                 JOIN `groups` g ON gm.group_id = g.id
+                                 JOIN groups g ON gm.group_id = g.id
                                  ORDER BY gm.created_at DESC
                                  LIMIT 1000"); // 限制1000条消息
     $stmt->execute();
@@ -204,7 +365,12 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
     'ban_user',
     'lift_ban',
     'ban_group',
-    'lift_group_ban'
+    'lift_group_ban',
+    'lift_ip_ban',
+    'lift_fingerprint_ban',
+    'ban_ip',
+    'ban_fingerprint',
+    'set_maintenance_mode'
 ])) {
     $action = $_POST['action'];
     $password = isset($_POST['password']) ? $_POST['password'] : '';
@@ -553,6 +719,181 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 }
                 break;
                 
+            case 'lift_ip_ban':
+                // 解除IP封禁
+                $ip_address = $_POST['ip_address'];
+                
+                try {
+                    // 删除IP封禁记录
+                    $stmt = $conn->prepare("DELETE FROM ip_bans WHERE ip_address = ?");
+                    $stmt->execute([$ip_address]);
+                    
+                    header('Location: admin.php?success=IP地址封禁已成功解除');
+                } catch (PDOException $e) {
+                    error_log("Lift IP ban error: " . $e->getMessage());
+                    header('Location: admin.php?error=解除IP封禁失败：' . $e->getMessage());
+                }
+                break;
+                
+            case 'lift_fingerprint_ban':
+                // 解除浏览器指纹封禁
+                $fingerprint = $_POST['fingerprint'];
+                
+                try {
+                    // 删除浏览器指纹封禁记录
+                    $stmt = $conn->prepare("DELETE FROM browser_bans WHERE fingerprint = ?");
+                    $stmt->execute([$fingerprint]);
+                    
+                    header('Location: admin.php?success=浏览器指纹封禁已成功解除');
+                } catch (PDOException $e) {
+                    error_log("Lift fingerprint ban error: " . $e->getMessage());
+                    header('Location: admin.php?error=解除浏览器指纹封禁失败：' . $e->getMessage());
+                }
+                break;
+                
+            case 'ban_ip':
+                // 手动封禁IP地址
+                $ip_address = $_POST['ip_address'];
+                $ban_duration = intval($_POST['ban_duration']);
+                $is_permanent = $_POST['is_permanent'] === '1';
+                
+                try {
+                    // 计算封禁结束时间
+                    $ban_end = $is_permanent ? null : date('Y-m-d H:i:s', time() + $ban_duration);
+                    
+                    // 检查是否已存在封禁记录
+                    $stmt = $conn->prepare("SELECT * FROM ip_bans WHERE ip_address = ?");
+                    $stmt->execute([$ip_address]);
+                    $existing_ban = $stmt->fetch();
+                    
+                    if ($existing_ban) {
+                        // 更新现有封禁记录
+                        $stmt = $conn->prepare("UPDATE ip_bans SET ban_duration = ?, ban_end = ?, status = 'active', attempts = attempts + 1 WHERE ip_address = ?");
+                        $stmt->execute([$ban_duration, $ban_end, $ip_address]);
+                    } else {
+                        // 创建新的封禁记录
+                        $stmt = $conn->prepare("INSERT INTO ip_bans (ip_address, ban_reason, ban_duration, ban_start, ban_end, status, attempts) VALUES (?, ?, ?, NOW(), ?, 'active', ?)");
+                        $stmt->execute([$ip_address, '手动封禁', $ban_duration, $ban_end, 1]);
+                    }
+                    
+                    header('Location: admin.php?success=IP地址已成功封禁');
+                } catch (PDOException $e) {
+                    error_log("Ban IP error: " . $e->getMessage());
+                    header('Location: admin.php?error=封禁IP地址失败：' . $e->getMessage());
+                }
+                break;
+                
+            case 'ban_fingerprint':
+                // 手动封禁浏览器指纹
+                $fingerprint = $_POST['fingerprint'];
+                $ban_duration = intval($_POST['ban_duration']);
+                $is_permanent = $_POST['is_permanent'] === '1';
+                
+                try {
+                    // 计算封禁结束时间
+                    $ban_end = $is_permanent ? null : date('Y-m-d H:i:s', time() + $ban_duration);
+                    
+                    // 检查是否已存在封禁记录
+                    $stmt = $conn->prepare("SELECT * FROM browser_bans WHERE fingerprint = ?");
+                    $stmt->execute([$fingerprint]);
+                    $existing_ban = $stmt->fetch();
+                    
+                    if ($existing_ban) {
+                        // 更新现有封禁记录
+                        $stmt = $conn->prepare("UPDATE browser_bans SET ban_duration = ?, ban_end = ?, status = 'active', attempts = attempts + 1 WHERE fingerprint = ?");
+                        $stmt->execute([$ban_duration, $ban_end, $fingerprint]);
+                    } else {
+                        // 创建新的封禁记录
+                        $stmt = $conn->prepare("INSERT INTO browser_bans (fingerprint, ban_reason, ban_duration, ban_start, ban_end, status, attempts) VALUES (?, ?, ?, NOW(), ?, 'active', ?)");
+                        $stmt->execute([$fingerprint, '手动封禁', $ban_duration, $ban_end, 1]);
+                    }
+                    
+                    header('Location: admin.php?success=浏览器指纹已成功封禁');
+                } catch (PDOException $e) {
+                    error_log("Ban fingerprint error: " . $e->getMessage());
+                    header('Location: admin.php?error=封禁浏览器指纹失败：' . $e->getMessage());
+                }
+                break;
+                
+            case 'set_maintenance_mode':
+                // 设置系统维护模式
+                $maintenance_mode = intval($_POST['maintenance_mode']);
+                $maintenance_duration = intval($_POST['maintenance_duration']);
+                $maintenance_page = $_POST['maintenance_page'];
+                
+                try {
+                    // 更新主配置文件
+                    $config_file = 'config/config.json';
+                    $config_data = json_decode(file_get_contents($config_file), true);
+                    $config_data['System_Maintenance'] = $maintenance_mode;
+                    $config_data['System_Maintenance_page'] = $maintenance_page;
+                    file_put_contents($config_file, json_encode($config_data, JSON_PRETTY_PRINT));
+                    
+                    // 创建或更新维护配置文件
+                    $maintenance_config_path = 'Maintenance/config.json';
+                    $maintenance_config = [];
+                    
+                    if (file_exists($maintenance_config_path)) {
+                        $maintenance_config = json_decode(file_get_contents($maintenance_config_path), true);
+                    }
+                    
+                    // 设置update.json文件路径
+                    $update_json_path = 'update.json';
+                    
+                    if ($maintenance_mode == 1) {
+                        // 开启维护模式，记录开始时间和预计时长
+                        $maintenance_start_time = time();
+                        
+                        // 更新maintenance_config
+                        $maintenance_config['maintenance_start_time'] = $maintenance_start_time;
+                        
+                        // 只有当选择现代化错误页面时，才处理维护时长
+                        if ($maintenance_page === 'index.html') {
+                            $maintenance_end_time = $maintenance_start_time + ($maintenance_duration * 3600);
+                            $maintenance_config['maintenance_duration'] = $maintenance_duration;
+                            
+                            // 更新update.json
+                            $update_json = [
+                                'start' => $maintenance_start_time,
+                                'end' => $maintenance_end_time
+                            ];
+                            file_put_contents($update_json_path, json_encode($update_json, JSON_PRETTY_PRINT));
+                            
+                            // 更新维护页面的预计时长显示
+                            $maintenance_html_path = 'Maintenance/index.html';
+                            $maintenance_html = file_get_contents($maintenance_html_path);
+                            $maintenance_html = preg_replace('/\{time\}/', $maintenance_duration, $maintenance_html);
+                            file_put_contents($maintenance_html_path, $maintenance_html);
+                        } else {
+                            // 选择Cloudflare错误页面时，清除维护时长相关配置
+                            unset($maintenance_config['maintenance_duration']);
+                            
+                            // 如果存在update.json文件，删除它
+                            if (file_exists($update_json_path)) {
+                                unlink($update_json_path);
+                            }
+                        }
+                    } else {
+                        // 关闭维护模式，清除维护信息
+                        unset($maintenance_config['maintenance_start_time']);
+                        unset($maintenance_config['maintenance_duration']);
+                        
+                        // 确保update.json文件被删除
+                        if (file_exists($update_json_path)) {
+                            unlink($update_json_path);
+                        }
+                    }
+                    
+                    // 保存维护配置
+                    file_put_contents($maintenance_config_path, json_encode($maintenance_config, JSON_PRETTY_PRINT));
+                    
+                    header('Location: admin.php?success=系统维护模式已更新');
+                } catch (Exception $e) {
+                    error_log("Set maintenance mode error: " . $e->getMessage());
+                    header('Location: admin.php?error=设置系统维护模式失败：' . $e->getMessage());
+                }
+                break;
+                
             case 'approve_password_request':
                 // 通过忘记密码申请
                 $request_id = intval($_POST['request_id']);
@@ -624,6 +965,112 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
     }
 }
 
+// 处理公告管理操作
+if (isset($_POST['action']) && in_array($_POST['action'], [
+    'create_announcement',
+    'edit_announcement',
+    'delete_announcement',
+    'toggle_announcement_status'
+])) {
+    $action = $_POST['action'];
+    $password = isset($_POST['password']) ? $_POST['password'] : '';
+    
+    // 验证管理员密码
+    if (!validateAdminPassword($password, $current_user, $conn)) {
+        header('Location: admin.php?error=密码错误，操作失败');
+        exit;
+    }
+    
+    try {
+        switch ($action) {
+            case 'create_announcement':
+                // 创建新公告
+                $title = isset($_POST['title']) ? trim($_POST['title']) : '';
+                $content = isset($_POST['content']) ? trim($_POST['content']) : '';
+                $is_active = isset($_POST['is_active']) ? (bool)$_POST['is_active'] : true;
+                
+                if (empty($title) || empty($content)) {
+                    header('Location: admin.php?error=公告标题和内容不能为空');
+                    exit;
+                }
+                
+                $stmt = $conn->prepare("INSERT INTO announcements (title, content, is_active, admin_id) VALUES (?, ?, ?, ?)");
+                $stmt->execute([$title, $content, $is_active, $current_user['id']]);
+                
+                header('Location: admin.php?success=公告发布成功');
+                break;
+                
+            case 'edit_announcement':
+                // 编辑公告
+                $id = intval($_POST['id']);
+                $title = isset($_POST['title']) ? trim($_POST['title']) : '';
+                $content = isset($_POST['content']) ? trim($_POST['content']) : '';
+                $is_active = isset($_POST['is_active']) ? (bool)$_POST['is_active'] : true;
+                
+                if (empty($title) || empty($content)) {
+                    header('Location: admin.php?error=公告标题和内容不能为空');
+                    exit;
+                }
+                
+                $stmt = $conn->prepare("UPDATE announcements SET title = ?, content = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                $stmt->execute([$title, $content, $is_active, $id]);
+                
+                header('Location: admin.php?success=公告编辑成功');
+                break;
+                
+            case 'delete_announcement':
+                // 删除公告
+                $id = intval($_POST['id']);
+                
+                $conn->beginTransaction();
+                
+                // 删除关联的已读记录
+                $stmt = $conn->prepare("DELETE FROM user_announcement_read WHERE announcement_id = ?");
+                $stmt->execute([$id]);
+                
+                // 删除公告
+                $stmt = $conn->prepare("DELETE FROM announcements WHERE id = ?");
+                $stmt->execute([$id]);
+                
+                $conn->commit();
+                
+                header('Location: admin.php?success=公告删除成功');
+                break;
+                
+            case 'toggle_announcement_status':
+                // 切换公告状态
+                $id = intval($_POST['id']);
+                $is_active = isset($_POST['is_active']) ? (bool)$_POST['is_active'] : false;
+                
+                $stmt = $conn->prepare("UPDATE announcements SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                $stmt->execute([$is_active, $id]);
+                
+                header('Location: admin.php?success=公告状态已更新');
+                break;
+        }
+        exit;
+    } catch (PDOException $e) {
+        error_log("Announcement action error for action {$action}: " . $e->getMessage());
+        header('Location: admin.php?error=操作失败：' . $e->getMessage());
+        exit;
+    }
+}
+
+// 获取所有公告
+$announcements = [];
+try {
+    $stmt = $conn->prepare("SELECT a.*, u.username as admin_username, 
+                           (SELECT COUNT(*) FROM user_announcement_read WHERE announcement_id = a.id) as read_count 
+                           FROM announcements a 
+                           JOIN users u ON a.admin_id = u.id 
+                           ORDER BY a.created_at DESC");
+    $stmt->execute();
+    $announcements = $stmt->fetchAll();
+} catch (PDOException $e) {
+    error_log("Get announcements error: " . $e->getMessage());
+    $announcements = [];
+}
+
 // 处理用户管理操作 - 已合并到上面的统一处理逻辑中
 ?>
 <!DOCTYPE html>
@@ -646,7 +1093,7 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
         }
         
         .container {
-            max-width: 114514px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -728,8 +1175,8 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
         
         .groups-list {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
         }
         
         .group-item {
@@ -738,6 +1185,26 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             border-radius: 8px;
             border: 1px solid #e0e0e0;
             transition: transform 0.2s, box-shadow 0.2s;
+            min-height: 300px;
+            max-height: none;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* 隐藏滚动条 */
+        .group-item::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .group-item {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* 确保按钮区域有足够空间 */
+        .group-item > div:last-child {
+            margin-top: auto;
         }
         
         .group-item:hover {
@@ -786,6 +1253,16 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             padding: 15px;
             border-radius: 8px;
             margin-top: 15px;
+        }
+        
+        /* 隐藏滚动条 */
+        .messages-container::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .messages-container {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
         }
         
         .message {
@@ -1031,10 +1508,10 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
         </div>
 
         <?php if (isset($_GET['success'])): ?>
-            <div class="success-message"><?php echo $_GET['success']; ?></div>
+            <div class="success-message"><?php echo htmlspecialchars($_GET['success']); ?></div>
         <?php endif; ?>
         <?php if (isset($_GET['error'])): ?>
-            <div class="error-message"><?php echo $_GET['error']; ?></div>
+            <div class="error-message"><?php echo htmlspecialchars($_GET['error']); ?></div>
         <?php endif; ?>
 
         <div class="section">
@@ -1048,7 +1525,10 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 <button class="tab" onclick="openTab(event, 'clear_data')">清除数据</button>
                 <button class="tab" onclick="openTab(event, 'feedback')">反馈管理</button>
                 <button class="tab" onclick="openTab(event, 'forget_password')">忘记密码审核</button>
+                <button class="tab" onclick="openTab(event, 'ban_management')">封禁管理</button>
+                <button class="tab" onclick="openTab(event, 'prohibited_words')">违禁词管理</button>
                 <button class="tab" onclick="openTab(event, 'system_settings')">系统设置</button>
+                <button class="tab" onclick="openTab(event, 'announcements')">公告发布</button>
             </div>
 
             <!-- 群聊管理 -->
@@ -1183,6 +1663,23 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             <!-- 用户管理 -->
             <div id="users" class="tab-content">
                 <h3>所有用户</h3>
+                <div style="margin-bottom: 20px;">
+                    <form method="GET" action="admin.php" style="display: flex; gap: 10px; align-items: center;">
+                        <input type="hidden" name="tab" value="users">
+                        <input type="text" name="search" placeholder="搜索用户名或邮箱..." style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 300px;">
+                        <button type="submit" style="padding: 8px 20px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
+                            搜索
+                        </button>
+                        <?php if (isset($_GET['search']) && !empty($_GET['search'])): ?>
+                            <a href="admin.php?tab=users" style="padding: 8px 15px; background: #f5f5f5; color: #333; border: 1px solid #ddd; border-radius: 4px; text-decoration: none; font-size: 14px;">
+                                清空
+                            </a>
+                        <?php endif; ?>
+                    </form>
+                </div>
+                <?php if (!empty($search_term)): ?>
+                    <p style="color: #666; margin-bottom: 15px;">找到了 <?php echo count($all_users); ?> 个匹配 "<?php echo htmlspecialchars($search_term); ?>" 的用户</p>
+                <?php endif; ?>
                 <div class="groups-list">
                     <?php foreach ($all_users as $user_item): ?>
                         <?php
@@ -1261,19 +1758,19 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                 <div class="group-item">
                     <h4>清除全部聊天记录</h4>
                     <p>清除所有群聊和好友的聊天记录，此操作不可恢复！</p>
-                    <button onclick="showClearDataModal('clear_all_messages')" style="margin-top: 10px; padding: 10px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">清除全部聊天记录</button>
+                    <button onclick="showClearDataModal('clear_all_messages')" style="margin-top: 10px; padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">清除全部聊天记录</button>
                 </div>
                 
                 <div class="group-item" style="margin-top: 20px;">
                     <h4>清除全部文件记录</h4>
                     <p>清除所有上传的文件记录，此操作不可恢复！</p>
-                    <button onclick="showClearDataModal('clear_all_files')" style="margin-top: 10px; padding: 10px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">清除全部文件记录</button>
+                    <button onclick="showClearDataModal('clear_all_files')" style="margin-top: 10px; padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">清除全部文件记录</button>
                 </div>
                 
                 <div class="group-item" style="margin-top: 20px;">
                     <h4>清除扫码登录数据</h4>
                     <p>清除所有扫码登录相关数据，包括过期和未过期的数据！</p>
-                    <button onclick="showClearDataModal('clear_all_scan_login')" style="margin-top: 10px; padding: 10px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">清除扫码登录数据</button>
+                    <button onclick="showClearDataModal('clear_all_scan_login')" style="margin-top: 10px; padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">清除扫码登录数据</button>
                 </div>
             </div>
             
@@ -1281,10 +1778,10 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             <div id="feedback" class="tab-content">
                 <h3>用户反馈</h3>
                 <div style="margin-bottom: 20px;">
-                    <button onclick="window.location.href='feedback-2.php'" style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">
-                        查看所有反馈
-                    </button>
-                </div>
+                        <button onclick="window.location.href='feedback-2.php'" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500;">
+                            查看所有反馈
+                        </button>
+                    </div>
             </div>
             
             <!-- 忘记密码审核 -->
@@ -1409,87 +1906,440 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
                     }
                     ?>
                     
+                    <!-- 系统设置表单 -->
                     <form method="POST" action="">
                         <input type="hidden" name="action" value="update_settings">
                         
                         <div class="settings-list">
                             <?php foreach ($config_data as $key => $value): ?>
-                                <div class="setting-item">
-                                    <div class="setting-info">
-                                        <label for="<?php echo $key; ?>">
-                                            <?php 
-                                            // 将配置键转换为更友好的名称
-                                            $friendly_name = str_replace('_', ' ', $key);
-                                            $friendly_name = ucwords($friendly_name);
-                                            echo $friendly_name;
-                                            ?>
-                                        </label>
-                                        <p class="setting-description"><?php 
-                                            // 添加配置项描述
-                                            switch ($key) {
-                                                case 'Create_a_group_chat_for_all_members':
-                                                    echo '是否为新用户自动创建全员群聊';
-                                                    break;
-                                                case 'Restrict_registration':
-                                                    echo '是否启用IP注册限制';
-                                                    break;
-                                                case 'Restrict_registration_ip':
-                                                    echo '每个IP地址允许注册的最大账号数';
-                                                    break;
-                                                case 'ban_system':
-                                                    echo '是否启用封禁系统';
-                                                    break;
-                                                case 'user_name_max':
-                                                    echo '用户名最大长度限制';
-                                                    break;
-                                                case 'upload_files_max':
-                                                    echo '最大允许上传文件大小（MB）';
-                                                    break;
-                                                case 'Session_Duration':
-                                                    echo '用户会话时长（小时）';
-                                                    break;
-                                                case 'email_verify':
-                                                    echo '是否启用邮箱验证功能';
-                                                    break;
-                                                case 'email_verify_api':
-                                                    echo '邮箱验证API地址';
-                                                    break;
-                                                case 'email_verify_api_Request':
-                                                    echo '邮箱验证API请求方法';
-                                                    break;
-                                                case 'email_verify_api_Verify_parameters':
-                                                    echo '邮箱验证API结果验证参数路径';
-                                                    break;
-                                                default:
-                                                    echo '';
-                                            }
-                                            ?></p>
-                                    </div>
-                                    
-                                    <div class="setting-value">
-                                        <?php if (is_bool($value)): ?>
-                                            <!-- 布尔值使用复选框 -->
-                                            <label class="toggle-switch">
-                                                <input type="checkbox" name="<?php echo $key; ?>" value="true" <?php echo $value ? 'checked' : ''; ?>>
-                                                <span class="toggle-slider"></span>
+                                <?php if ($key !== 'System_Maintenance'): ?>
+                                    <div class="setting-item">
+                                        <div class="setting-info">
+                                            <label for="<?php echo $key; ?>">
+                                                <?php 
+                                                // 将配置键转换为更友好的名称
+                                                $friendly_name = str_replace('_', ' ', $key);
+                                                $friendly_name = ucwords($friendly_name);
+                                                echo $friendly_name;
+                                                ?>
                                             </label>
-                                        <?php else: ?>
-                                            <!-- 其他类型使用输入框 -->
-                                            <input type="text" name="<?php echo $key; ?>" value="<?php echo $value; ?>" 
-                                                style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 100px;">
-                                        <?php endif; ?>
+                                            <p class="setting-description"><?php 
+                                                // 添加配置项描述
+                                                switch ($key) {
+                                                    case 'Create_a_group_chat_for_all_members':
+                                                        echo '是否为新用户自动创建全员群聊';
+                                                        break;
+                                                    case 'Restrict_registration':
+                                                        echo '是否启用IP注册限制';
+                                                        break;
+                                                    case 'Restrict_registration_ip':
+                                                        echo '每个IP地址允许注册的最大账号数';
+                                                        break;
+                                                    case 'ban_system':
+                                                        echo '是否启用封禁系统';
+                                                        break;
+                                                    case 'user_name_max':
+                                                        echo '用户名最大长度限制';
+                                                        break;
+                                                    case 'upload_files_max':
+                                                        echo '最大允许上传文件大小（MB）';
+                                                        break;
+                                                    case 'Session_Duration':
+                                                        echo '用户会话时长（小时）';
+                                                        break;
+                                                    case 'Number_of_incorrect_password_attempts':
+                                                        echo '允许的错误登录尝试次数';
+                                                        break;
+                                                    case 'Limit_login_duration':
+                                                        echo '第一次封禁时长（小时）';
+                                                        break;
+                                                    case 'email_verify':
+                                                        echo '是否启用邮箱验证功能';
+                                                        break;
+                                                    case 'email_verify_api':
+                                                        echo '邮箱验证API地址';
+                                                        break;
+                                                    case 'email_verify_api_Request':
+                                                        echo '邮箱验证API请求方法';
+                                                        break;
+                                                    case 'email_verify_api_Verify_parameters':
+                                                        echo '邮箱验证API结果验证参数路径';
+                                                        break;
+                                                    case 'Random_song':
+                                                        echo '是否在聊天页面右下角显示随机音乐播放器';
+                                                        break;
+                                                    default:
+                                                        echo '';
+                                                }
+                                                ?></p>
+                                        </div>
+                                        
+                                        <div class="setting-value">
+                                            <?php if (is_bool($value)): ?>
+                                                <!-- 布尔值使用复选框 -->
+                                                <label class="toggle-switch">
+                                                    <input type="checkbox" name="<?php echo $key; ?>" value="true" <?php echo $value ? 'checked' : ''; ?>>
+                                                    <span class="toggle-slider"></span>
+                                                </label>
+                                            <?php elseif ($key === 'email_verify_api_Request'): ?>
+                                                <!-- 邮箱验证API请求方法使用下拉选择框 -->
+                                                <select name="<?php echo $key; ?>" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 100px;">
+                                                    <option value="POST" <?php echo strtoupper($value) === 'POST' ? 'selected' : ''; ?>>POST</option>
+                                                    <option value="GET" <?php echo strtoupper($value) === 'GET' ? 'selected' : ''; ?>>GET</option>
+                                                </select>
+                                            <?php else: ?>
+                                                <!-- 其他类型使用输入框 -->
+                                                <input type="text" name="<?php echo $key; ?>" value="<?php echo $value; ?>" 
+                                                    style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 100px;">
+                                            <?php endif; ?>
+                                        </div>
                                     </div>
-                                </div>
+                                <?php endif; ?>
                             <?php endforeach; ?>
                         </div>
                         
-                        <button type="submit" class="btn" style="margin-top: 20px; padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        <button type="submit" class="btn" style="margin-top: 20px; padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
                             保存设置
                         </button>
                     </form>
                     
+                    <!-- 系统维护模式设置表单 -->
+                    <div style="margin-top: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+                        <h4 style="margin-bottom: 20px; color: #333;">系统维护模式</h4>
+                        <form method="POST" action="">
+                            <input type="hidden" name="action" value="set_maintenance_mode">
+                            
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">维护模式</label>
+                                <select name="maintenance_mode" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 150px;">
+                                    <option value="0" <?php echo $config_data['System_Maintenance'] == 0 ? 'selected' : ''; ?>>关闭</option>
+                                    <option value="1" <?php echo $config_data['System_Maintenance'] == 1 ? 'selected' : ''; ?>>开启</option>
+                                </select>
+                            </div>
+                            
+                            <div id="maintenance_duration_container" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">预计维护时长（小时）</label>
+                                <input type="number" name="maintenance_duration" min="1" max="24" value="1" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 150px;">
+                            </div>
+                            
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">错误页面样式</label>
+                                <select name="maintenance_page" id="maintenance_page" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 300px;">
+                                    <option value="cloudflare_error.html" <?php echo $config_data['System_Maintenance_page'] == 'cloudflare_error.html' ? 'selected' : ''; ?>>Cloudflare错误页面</option>
+                                    <option value="index.html" <?php echo $config_data['System_Maintenance_page'] == 'index.html' ? 'selected' : ''; ?>>现代化错误页面</option>
+                                </select>
+                            </div>
+                            
+                            <script>
+                                // 初始检查维护页面选择
+                                function checkMaintenancePage() {
+                                    const maintenancePage = document.getElementById('maintenance_page').value;
+                                    const durationContainer = document.getElementById('maintenance_duration_container');
+                                    const durationInput = document.querySelector('input[name="maintenance_duration"]');
+                                    
+                                    if (maintenancePage === 'cloudflare_error.html') {
+                                        // 隐藏预计维护时长输入框
+                                        durationContainer.style.display = 'none';
+                                        durationInput.removeAttribute('required');
+                                    } else {
+                                        // 显示预计维护时长输入框
+                                        durationContainer.style.display = 'block';
+                                        durationInput.setAttribute('required', 'required');
+                                    }
+                                }
+                                
+                                // 页面加载时检查
+                                checkMaintenancePage();
+                                
+                                // 监听选择变化
+                                document.getElementById('maintenance_page').addEventListener('change', checkMaintenancePage);
+                            </script>
+                            
+                            <div style="margin-bottom: 20px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 600;">管理员密码</label>
+                                <input type="password" name="password" required style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 300px;">
+                            </div>
+                            
+                            <button type="submit" class="btn" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                保存维护模式设置
+                            </button>
+                        </form>
+                    </div>
+                    
                     <div style="background: #ff9800; color: white; padding: 10px; border-radius: 5px; margin-top: 20px;">
                         <strong>注意：</strong>修改设置前请确保不会影响用户的前提下重启网站服务才能生效
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 公告管理 -->
+            <div id="announcements" class="tab-content">
+                <h3>公告发布</h3>
+                
+                <!-- 发布新公告 -->
+                <div style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+                    <h4 style="margin-bottom: 20px; color: #333;">发布新公告</h4>
+                    <form method="POST" action="">
+                        <input type="hidden" name="action" value="create_announcement">
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label for="announcement-title" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">公告标题</label>
+                            <input type="text" id="announcement-title" name="title" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label for="announcement-content" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">公告内容</label>
+                            <textarea id="announcement-content" name="content" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px; resize: vertical; min-height: 150px;"></textarea>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; color: #333; font-weight: 500;">
+                                <input type="checkbox" name="is_active" checked style="margin-right: 8px;">
+                                立即发布
+                            </label>
+                        </div>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <label for="announcement-password" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">管理员密码</label>
+                            <input type="password" id="announcement-password" name="password" required style="width: 300px; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                        </div>
+                        
+                        <button type="submit" style="padding: 12px 25px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">发布公告</button>
+                    </form>
+                </div>
+                
+                <!-- 公告列表 -->
+                <div>
+                    <h4 style="margin-bottom: 20px; color: #333;">所有公告</h4>
+                    
+                    <div style="overflow-x: auto; margin-bottom: 20px;">
+                        <!-- 隐藏滚动条 -->
+                        <style scoped>
+                            div::-webkit-scrollbar { display: none; }
+                            div { -ms-overflow-style: none; scrollbar-width: none; }
+                        </style>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #e9ecef; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">ID</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">标题</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">内容</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">发布者</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">状态</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">发布时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">收到人数</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">更新时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($announcements)): ?>
+                                    <tr>
+                                        <td colspan="9" style="padding: 20px; text-align: center; color: #666;">暂无公告</td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($announcements as $announcement): ?>
+                                        <tr style="border-bottom: 1px solid #f0f0f0;">
+                                            <td style="padding: 12px; color: #333;"><?php echo $announcement['id']; ?></td>
+                                            <td style="padding: 12px; color: #333; max-width: 200px;"><?php echo htmlspecialchars($announcement['title']); ?></td>
+                                            <td style="padding: 12px; color: #666; max-width: 300px;"><?php echo htmlspecialchars(substr($announcement['content'], 0, 50)) . (strlen($announcement['content']) > 50 ? '...' : ''); ?></td>
+                                            <td style="padding: 12px; color: #666;"><?php echo $announcement['admin_username']; ?></td>
+                                            <td style="padding: 12px;">
+                                                <span class="status-<?php echo $announcement['is_active'] ? 'approved' : 'pending'; ?>">
+                                                    <?php echo $announcement['is_active'] ? '已发布' : '未发布'; ?>
+                                                </span>
+                                            </td>
+                                            <td style="padding: 12px; color: #666; font-size: 12px;"><?php echo $announcement['created_at']; ?></td>
+                                            <td style="padding: 12px; color: #666; font-size: 12px;"><?php echo $announcement['read_count']; ?></td>
+                                            <td style="padding: 12px; color: #666; font-size: 12px;"><?php echo $announcement['updated_at']; ?></td>
+                                            <td style="padding: 12px;">
+                                                <!-- 编辑按钮 -->
+                                                <button onclick="showEditAnnouncementModal(<?php echo $announcement['id']; ?>, '<?php echo htmlspecialchars($announcement['title']); ?>', '<?php echo htmlspecialchars($announcement['content']); ?>', <?php echo $announcement['is_active'] ? 'true' : 'false'; ?>)" 
+                                                        style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 5px;">
+                                                    编辑
+                                                </button>
+                                                
+                                                <!-- 删除按钮 -->
+                                                <button onclick="showDeleteAnnouncementModal(<?php echo $announcement['id']; ?>, '<?php echo htmlspecialchars($announcement['title']); ?>')" 
+                                                        style="padding: 6px 12px; background: #ff4757; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 5px;">
+                                                    删除
+                                                </button>
+                                                
+                                                <!-- 状态切换按钮 -->
+                                                <form method="POST" action="" style="display: inline;">
+                                                    <input type="hidden" name="action" value="toggle_announcement_status">
+                                                    <input type="hidden" name="id" value="<?php echo $announcement['id']; ?>">
+                                                    <input type="hidden" name="is_active" value="<?php echo $announcement['is_active'] ? '0' : '1'; ?>">
+                                                    <input type="password" name="password" placeholder="密码" style="width: 100px; padding: 4px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 12px; margin-right: 5px;">
+                                                    <button type="submit" style="padding: 4px 8px; background: #2ed573; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                                        <?php echo $announcement['is_active'] ? '停用' : '启用'; ?>
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 封禁管理 -->
+            <div id="ban_management" class="tab-content">
+                <h3>封禁管理</h3>
+                
+                <!-- 手动封禁功能 -->
+                <div style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+                    <h4 style="margin-bottom: 20px; color: #333;">手动封禁</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                        <!-- IP地址封禁 -->
+                        <div>
+                            <h5 style="margin-bottom: 15px; color: #555;">IP地址封禁</h5>
+                            <input type="text" id="manual-ip" placeholder="输入IP地址" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; margin-bottom: 10px; font-size: 14px;">
+                            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                                <input type="number" id="manual-ip-duration" placeholder="封禁时长（小时）" min="1" style="flex: 1; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                                <select id="manual-ip-permanent" style="padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                                    <option value="false">临时封禁</option>
+                                    <option value="true">永久封禁</option>
+                                </select>
+                            </div>
+                            <button onclick="showBanIPModal()" style="width: 100%; padding: 12px; background: #e57373; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">封禁IP地址</button>
+                        </div>
+                        
+                        <!-- 浏览器指纹封禁 -->
+                        <div>
+                            <h5 style="margin-bottom: 15px; color: #555;">浏览器指纹封禁</h5>
+                            <input type="text" id="manual-fingerprint" placeholder="输入浏览器指纹" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; margin-bottom: 10px; font-size: 14px;">
+                            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                                <input type="number" id="manual-fingerprint-duration" placeholder="封禁时长（小时）" min="1" style="flex: 1; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                                <select id="manual-fingerprint-permanent" style="padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                                    <option value="false">临时封禁</option>
+                                    <option value="true">永久封禁</option>
+                                </select>
+                            </div>
+                            <button onclick="showBanFingerprintModal()" style="width: 100%; padding: 12px; background: #e57373; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">封禁浏览器指纹</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- IP地址封禁列表 -->
+                <div style="margin-bottom: 30px;">
+                    <h4 style="margin-bottom: 20px; color: #333;">IP地址封禁记录</h4>
+                    <div class="search-container" style="margin-bottom: 20px;">
+                        <input type="text" id="ip-search" placeholder="搜索IP地址" style="padding: 8px; width: 300px; border: 1px solid #e0e0e0; border-radius: 4px; margin-right: 10px;">
+                        <button onclick="searchIPBans()" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">搜索</button>
+                        <button onclick="clearIPSearch()" style="padding: 8px 16px; background: #f5f5f5; color: #333; border: 1px solid #e0e0e0; border-radius: 4px; cursor: pointer;">清除</button>
+                    </div>
+                    
+                    <div class="bans-list">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #e9ecef; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">IP地址</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">尝试次数</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">封禁开始时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">封禁结束时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">状态</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ip-bans-table-body">
+                                <?php
+                                // 查询所有IP封禁记录
+                                try {
+                                    $stmt = $conn->prepare("SELECT * FROM ip_bans ORDER BY ban_end DESC");
+                                    $stmt->execute();
+                                    $ip_bans = $stmt->fetchAll();
+                                    
+                                    if (empty($ip_bans)) {
+                                        echo '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #666;">没有IP封禁记录</td></tr>';
+                                    } else {
+                                        foreach ($ip_bans as $ban) {
+                                            $status = '已封禁';
+                                            if ($ban['ban_end'] && strtotime($ban['ban_end']) < time()) {
+                                                $status = '已过期';
+                                            }
+                                            
+                                            echo '<tr style="border-bottom: 1px solid #f0f0f0;">
+                                                <td style="padding: 12px; color: #333;">' . htmlspecialchars($ban['ip_address']) . '</td>
+                                                <td style="padding: 12px; color: #666;">' . $ban['attempts'] . '</td>
+                                                <td style="padding: 12px; color: #666;">' . $ban['ban_start'] . '</td>
+                                                <td style="padding: 12px; color: #666;">' . ($ban['ban_end'] ? $ban['ban_end'] : '永久') . '</td>
+                                                <td style="padding: 12px;"><span class="status-' . ($status === '已封禁' ? 'pending' : 'approved') . '">' . $status . '</span></td>
+                                                <td style="padding: 12px;">
+                                                    <button onclick="showLiftIPBanModal(\'' . htmlspecialchars($ban['ip_address']) . '\')" style="padding: 6px 12px; background: #81c784; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">解除封禁</button>
+                                                </td>
+                                            </tr>';
+                                        }
+                                    }
+                                } catch (PDOException $e) {
+                                    error_log("Get IP bans error: " . $e->getMessage());
+                                    echo '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #ff4757;">查询IP封禁记录失败</td></tr>';
+                                }
+                                ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- 浏览器指纹封禁列表 -->
+                <div>
+                    <h4 style="margin-bottom: 20px; color: #333;">浏览器指纹封禁记录</h4>
+                    <div class="search-container" style="margin-bottom: 20px;">
+                        <input type="text" id="fingerprint-search" placeholder="搜索浏览器指纹" style="padding: 8px; width: 300px; border: 1px solid #e0e0e0; border-radius: 4px; margin-right: 10px;">
+                        <button onclick="searchFingerprintBans()" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">搜索</button>
+                        <button onclick="clearFingerprintSearch()" style="padding: 8px 16px; background: #f5f5f5; color: #333; border: 1px solid #e0e0e0; border-radius: 4px; cursor: pointer;">清除</button>
+                    </div>
+                    
+                    <div class="bans-list">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #e9ecef; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">浏览器指纹</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">尝试次数</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">封禁开始时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">封禁结束时间</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">状态</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600; color: #333;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="fingerprint-bans-table-body">
+                                <?php
+                                // 查询所有浏览器指纹封禁记录
+                                try {
+                                    $stmt = $conn->prepare("SELECT * FROM browser_bans ORDER BY ban_end DESC");
+                                    $stmt->execute();
+                                    $browser_bans = $stmt->fetchAll();
+                                    
+                                    if (empty($browser_bans)) {
+                                        echo '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #666;">没有浏览器指纹封禁记录</td></tr>';
+                                    } else {
+                                        foreach ($browser_bans as $ban) {
+                                            $status = '已封禁';
+                                            if ($ban['ban_end'] && strtotime($ban['ban_end']) < time()) {
+                                                $status = '已过期';
+                                            }
+                                            
+                                            echo '<tr style="border-bottom: 1px solid #f0f0f0;">
+                                                <td style="padding: 12px; color: #333; max-width: 300px; word-break: break-all;">' . htmlspecialchars($ban['fingerprint']) . '</td>
+                                                <td style="padding: 12px; color: #666;">' . $ban['attempts'] . '</td>
+                                                <td style="padding: 12px; color: #666;">' . $ban['ban_start'] . '</td>
+                                                <td style="padding: 12px; color: #666;">' . ($ban['ban_end'] ? $ban['ban_end'] : '永久') . '</td>
+                                                <td style="padding: 12px;"><span class="status-' . ($status === '已封禁' ? 'pending' : 'approved') . '">' . $status . '</span></td>
+                                                <td style="padding: 12px;">
+                                                    <button onclick="showLiftFingerprintBanModal(\'' . htmlspecialchars($ban['fingerprint']) . '\')" style="padding: 6px 12px; background: #81c784; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">解除封禁</button>
+                                                </td>
+                                            </tr>';
+                                        }
+                                    }
+                                } catch (PDOException $e) {
+                                    error_log("Get browser bans error: " . $e->getMessage());
+                                    echo '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #ff4757;">查询浏览器指纹封禁记录失败</td></tr>';
+                                }
+                                ?>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -1779,11 +2629,160 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
         <!-- 封禁记录弹窗 -->
         <div id="ban-record-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
             <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+                <!-- 隐藏滚动条 -->
+                <style scoped>
+                    div::-webkit-scrollbar { display: none; }
+                    div { -ms-overflow-style: none; scrollbar-width: none; }
+                </style>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h3 id="ban-record-title" style="color: #333;">封禁记录</h3>
                     <button onclick="closeBanRecordModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
                 </div>
                 <div id="ban-record-content"></div>
+            </div>
+        </div>
+        
+        <!-- 解除IP封禁弹窗 -->
+        <div id="lift-ip-ban-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">解除IP封禁</h3>
+                <p id="lift-ip-ban-address" style="margin-bottom: 20px; color: #666; text-align: center;"></p>
+                <p style="margin-bottom: 20px; color: #333; text-align: center;">确定要解除该IP地址的封禁吗？</p>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-lift-ip-ban" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-lift-ip-ban" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-lift-ip-ban" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-lift-ip-ban-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-lift-ip-ban-btn" style="padding: 12px 25px; background: #81c784; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 解除浏览器指纹封禁弹窗 -->
+        <div id="lift-fingerprint-ban-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">解除浏览器指纹封禁</h3>
+                <p id="lift-fingerprint-ban-fingerprint" style="margin-bottom: 20px; color: #666; text-align: center; word-break: break-all;"></p>
+                <p style="margin-bottom: 20px; color: #333; text-align: center;">确定要解除该浏览器指纹的封禁吗？</p>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-lift-fingerprint-ban" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-lift-fingerprint-ban" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-lift-fingerprint-ban" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-lift-fingerprint-ban-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-lift-fingerprint-ban-btn" style="padding: 12px 25px; background: #81c784; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 手动封禁IP地址弹窗 -->
+        <div id="ban-ip-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">手动封禁IP地址</h3>
+                <p id="ban-ip-address" style="margin-bottom: 20px; color: #666; text-align: center;"></p>
+                <p id="ban-ip-details" style="margin-bottom: 20px; color: #333; text-align: center;"></p>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-ban-ip" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-ban-ip" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-ban-ip" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-ban-ip-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-ban-ip-btn" style="padding: 12px 25px; background: #e57373; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 手动封禁浏览器指纹弹窗 -->
+        <div id="ban-fingerprint-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">手动封禁浏览器指纹</h3>
+                <p id="ban-fingerprint-fingerprint" style="margin-bottom: 20px; color: #666; text-align: center; word-break: break-all;"></p>
+                <p id="ban-fingerprint-details" style="margin-bottom: 20px; color: #333; text-align: center;"></p>
+                
+                <!-- 密码验证 -->
+                <div style="margin-bottom: 20px;">
+                    <label for="admin-password-ban-fingerprint" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">请输入管理员密码：</label>
+                    <input type="password" id="admin-password-ban-fingerprint" placeholder="输入密码" style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s;">
+                    <p id="admin-password-error-ban-fingerprint" style="margin-top: 8px; color: #ff4757; font-size: 12px; display: none;">密码错误，请重试</p>
+                </div>
+                
+                <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                    <button id="cancel-ban-fingerprint-btn" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                    <button id="confirm-ban-fingerprint-btn" style="padding: 12px 25px; background: #e57373; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">确定</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 编辑公告弹窗 -->
+        <div id="edit-announcement-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 600px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">编辑公告</h3>
+                <form id="edit-announcement-form" method="POST" action="">
+                    <input type="hidden" name="action" value="edit_announcement">
+                    <input type="hidden" id="edit-announcement-id" name="id" value="">
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label for="edit-announcement-title" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">公告标题</label>
+                        <input type="text" id="edit-announcement-title" name="title" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label for="edit-announcement-content" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">公告内容</label>
+                        <textarea id="edit-announcement-content" name="content" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px; resize: vertical; min-height: 150px;"></textarea>
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: flex; align-items: center; color: #333; font-weight: 500;">
+                            <input type="checkbox" id="edit-announcement-active" name="is_active" style="margin-right: 8px;">
+                            立即发布
+                        </label>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label for="edit-announcement-password" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">管理员密码</label>
+                        <input type="password" id="edit-announcement-password" name="password" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                    </div>
+                    
+                    <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                        <button type="button" onclick="closeEditAnnouncementModal()" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                        <button type="submit" style="padding: 12px 25px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">保存修改</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- 删除公告弹窗 -->
+        <div id="delete-announcement-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 3000; flex-direction: column; align-items: center; justify-content: center;">
+            <div style="background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+                <h3 style="margin-bottom: 20px; color: #333; text-align: center;">删除公告</h3>
+                <p style="margin-bottom: 20px; color: #666; text-align: center;">确定要删除该公告吗？此操作不可恢复！</p>
+                <form id="delete-announcement-form" method="POST" action="">
+                    <input type="hidden" name="action" value="delete_announcement">
+                    <input type="hidden" id="delete-announcement-id" name="id" value="">
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label for="delete-announcement-password" style="display: block; margin-bottom: 8px; color: #333; font-weight: 500;">管理员密码</label>
+                        <input type="password" id="delete-announcement-password" name="password" required style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 14px;">
+                    </div>
+                    
+                    <div style="display: flex; gap: 15px; justify-content: center; align-items: center;">
+                        <button type="button" onclick="closeDeleteAnnouncementModal()" style="padding: 12px 25px; background: #f5f5f5; color: #333; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: background-color 0.2s;">取消</button>
+                        <button type="submit" style="padding: 12px 25px; background: #ff4757; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; flex: 1; font-size: 14px; transition: all 0.2s;">删除公告</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -1802,8 +2801,47 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             }
             // 打开当前标签页
             document.getElementById(tabName).style.display = "block";
-            evt.currentTarget.className += " active";
+            if (evt) {
+                evt.currentTarget.className += " active";
+            } else {
+                // 如果没有事件对象，手动激活对应标签
+                var tabBtn = document.querySelector(`[onclick="openTab(event, '${tabName}')"]`);
+                if (tabBtn) {
+                    tabBtn.className += " active";
+                }
+            }
         }
+        
+        // 公告管理相关函数
+        function showEditAnnouncementModal(id, title, content, isActive) {
+            document.getElementById('edit-announcement-id').value = id;
+            document.getElementById('edit-announcement-title').value = title;
+            document.getElementById('edit-announcement-content').value = content;
+            document.getElementById('edit-announcement-active').checked = isActive;
+            document.getElementById('edit-announcement-modal').style.display = 'flex';
+        }
+        
+        function closeEditAnnouncementModal() {
+            document.getElementById('edit-announcement-modal').style.display = 'none';
+        }
+        
+        function showDeleteAnnouncementModal(id) {
+            document.getElementById('delete-announcement-id').value = id;
+            document.getElementById('delete-announcement-modal').style.display = 'flex';
+        }
+        
+        function closeDeleteAnnouncementModal() {
+            document.getElementById('delete-announcement-modal').style.display = 'none';
+        }
+        
+        // 页面加载时检查URL参数，激活对应的标签页
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const tab = urlParams.get('tab');
+            if (tab && document.getElementById(tab)) {
+                openTab(null, tab);
+            }
+        });
         
         // 清除数据相关变量
         let currentClearAction = '';
@@ -2957,6 +3995,356 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             }
         }
         
+        // 封禁管理相关变量
+        let currentIPAddress = '';
+        let currentFingerprint = '';
+        
+        // 搜索IP封禁记录
+        function searchIPBans() {
+            const searchTerm = document.getElementById('ip-search').value.toLowerCase();
+            const rows = document.querySelectorAll('#ip-bans-table-body tr');
+            
+            rows.forEach(row => {
+                const ipAddress = row.querySelector('td:nth-child(1)').textContent.toLowerCase();
+                if (ipAddress.includes(searchTerm)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+        
+        // 清除IP搜索
+        function clearIPSearch() {
+            document.getElementById('ip-search').value = '';
+            const rows = document.querySelectorAll('#ip-bans-table-body tr');
+            rows.forEach(row => {
+                row.style.display = '';
+            });
+        }
+        
+        // 搜索浏览器指纹封禁记录
+        function searchFingerprintBans() {
+            const searchTerm = document.getElementById('fingerprint-search').value.toLowerCase();
+            const rows = document.querySelectorAll('#fingerprint-bans-table-body tr');
+            
+            rows.forEach(row => {
+                const fingerprint = row.querySelector('td:nth-child(1)').textContent.toLowerCase();
+                if (fingerprint.includes(searchTerm)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+        
+        // 清除浏览器指纹搜索
+        function clearFingerprintSearch() {
+            document.getElementById('fingerprint-search').value = '';
+            const rows = document.querySelectorAll('#fingerprint-bans-table-body tr');
+            rows.forEach(row => {
+                row.style.display = '';
+            });
+        }
+        
+        // 显示解除IP封禁弹窗
+        function showLiftIPBanModal(ipAddress) {
+            currentIPAddress = ipAddress;
+            
+            // 重置表单
+            document.getElementById('admin-password-lift-ip-ban').value = '';
+            document.getElementById('admin-password-error-lift-ip-ban').style.display = 'none';
+            
+            // 设置IP地址显示
+            document.getElementById('lift-ip-ban-address').textContent = `IP地址: ${ipAddress}`;
+            
+            // 显示弹窗
+            document.getElementById('lift-ip-ban-modal').style.display = 'flex';
+            
+            // 添加事件监听器
+            document.getElementById('cancel-lift-ip-ban-btn').addEventListener('click', closeLiftIPBanModal);
+            document.getElementById('confirm-lift-ip-ban-btn').addEventListener('click', handleConfirmLiftIPBan);
+            document.getElementById('admin-password-lift-ip-ban').addEventListener('input', handleLiftIPBanPasswordInput);
+        }
+        
+        // 关闭解除IP封禁弹窗
+        function closeLiftIPBanModal() {
+            document.getElementById('lift-ip-ban-modal').style.display = 'none';
+            
+            // 移除事件监听器
+            document.getElementById('cancel-lift-ip-ban-btn').removeEventListener('click', closeLiftIPBanModal);
+            document.getElementById('confirm-lift-ip-ban-btn').removeEventListener('click', handleConfirmLiftIPBan);
+            document.getElementById('admin-password-lift-ip-ban').removeEventListener('input', handleLiftIPBanPasswordInput);
+        }
+        
+        // 处理解除IP封禁密码输入
+        function handleLiftIPBanPasswordInput() {
+            document.getElementById('admin-password-error-lift-ip-ban').style.display = 'none';
+        }
+        
+        // 处理确认解除IP封禁
+        async function handleConfirmLiftIPBan() {
+            const password = document.getElementById('admin-password-lift-ip-ban').value;
+            
+            // 验证密码
+            const isValidPassword = await validatePassword(password);
+            if (!isValidPassword) {
+                document.getElementById('admin-password-error-lift-ip-ban').textContent = '密码错误，请重试';
+                document.getElementById('admin-password-error-lift-ip-ban').style.display = 'block';
+                return;
+            }
+            
+            // 创建表单
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.style.display = 'none';
+            
+            // 添加表单字段
+            form.appendChild(createHiddenInput('action', 'lift_ip_ban'));
+            form.appendChild(createHiddenInput('ip_address', currentIPAddress));
+            form.appendChild(createHiddenInput('password', password));
+            
+            // 添加到页面并提交
+            document.body.appendChild(form);
+            form.submit();
+        }
+        
+        // 显示解除浏览器指纹封禁弹窗
+        function showLiftFingerprintBanModal(fingerprint) {
+            currentFingerprint = fingerprint;
+            
+            // 重置表单
+            document.getElementById('admin-password-lift-fingerprint-ban').value = '';
+            document.getElementById('admin-password-error-lift-fingerprint-ban').style.display = 'none';
+            
+            // 设置指纹显示
+            document.getElementById('lift-fingerprint-ban-fingerprint').textContent = `浏览器指纹: ${fingerprint}`;
+            
+            // 显示弹窗
+            document.getElementById('lift-fingerprint-ban-modal').style.display = 'flex';
+            
+            // 添加事件监听器
+            document.getElementById('cancel-lift-fingerprint-ban-btn').addEventListener('click', closeLiftFingerprintBanModal);
+            document.getElementById('confirm-lift-fingerprint-ban-btn').addEventListener('click', handleConfirmLiftFingerprintBan);
+            document.getElementById('admin-password-lift-fingerprint-ban').addEventListener('input', handleLiftFingerprintBanPasswordInput);
+        }
+        
+        // 关闭解除浏览器指纹封禁弹窗
+        function closeLiftFingerprintBanModal() {
+            document.getElementById('lift-fingerprint-ban-modal').style.display = 'none';
+            
+            // 移除事件监听器
+            document.getElementById('cancel-lift-fingerprint-ban-btn').removeEventListener('click', closeLiftFingerprintBanModal);
+            document.getElementById('confirm-lift-fingerprint-ban-btn').removeEventListener('click', handleConfirmLiftFingerprintBan);
+            document.getElementById('admin-password-lift-fingerprint-ban').removeEventListener('input', handleLiftFingerprintBanPasswordInput);
+        }
+        
+        // 处理解除浏览器指纹封禁密码输入
+        function handleLiftFingerprintBanPasswordInput() {
+            document.getElementById('admin-password-error-lift-fingerprint-ban').style.display = 'none';
+        }
+        
+        // 处理确认解除浏览器指纹封禁
+        async function handleConfirmLiftFingerprintBan() {
+            const password = document.getElementById('admin-password-lift-fingerprint-ban').value;
+            
+            // 验证密码
+            const isValidPassword = await validatePassword(password);
+            if (!isValidPassword) {
+                document.getElementById('admin-password-error-lift-fingerprint-ban').textContent = '密码错误，请重试';
+                document.getElementById('admin-password-error-lift-fingerprint-ban').style.display = 'block';
+                return;
+            }
+            
+            // 创建表单
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.style.display = 'none';
+            
+            // 添加表单字段
+            form.appendChild(createHiddenInput('action', 'lift_fingerprint_ban'));
+            form.appendChild(createHiddenInput('fingerprint', currentFingerprint));
+            form.appendChild(createHiddenInput('password', password));
+            
+            // 添加到页面并提交
+            document.body.appendChild(form);
+            form.submit();
+        }
+        
+        // 显示手动封禁IP地址弹窗
+        function showBanIPModal() {
+            const ipAddress = document.getElementById('manual-ip').value.trim();
+            const duration = document.getElementById('manual-ip-duration').value.trim();
+            const isPermanent = document.getElementById('manual-ip-permanent').value === 'true';
+            
+            // 验证输入
+            if (!ipAddress) {
+                alert('请输入IP地址');
+                return;
+            }
+            
+            if (!isPermanent && !duration) {
+                alert('请输入封禁时长');
+                return;
+            }
+            
+            // 设置弹窗内容
+            document.getElementById('ban-ip-address').textContent = `IP地址: ${ipAddress}`;
+            let details = '';
+            if (isPermanent) {
+                details = '封禁类型: 永久封禁';
+            } else {
+                details = `封禁类型: 临时封禁，时长: ${duration} 小时`;
+            }
+            document.getElementById('ban-ip-details').textContent = details;
+            
+            // 重置表单
+            document.getElementById('admin-password-ban-ip').value = '';
+            document.getElementById('admin-password-error-ban-ip').style.display = 'none';
+            
+            // 显示弹窗
+            document.getElementById('ban-ip-modal').style.display = 'flex';
+            
+            // 添加事件监听器
+            document.getElementById('cancel-ban-ip-btn').addEventListener('click', closeBanIPModal);
+            document.getElementById('confirm-ban-ip-btn').addEventListener('click', handleConfirmBanIP);
+            document.getElementById('admin-password-ban-ip').addEventListener('input', handleBanIPPasswordInput);
+        }
+        
+        // 关闭手动封禁IP地址弹窗
+        function closeBanIPModal() {
+            document.getElementById('ban-ip-modal').style.display = 'none';
+            
+            // 移除事件监听器
+            document.getElementById('cancel-ban-ip-btn').removeEventListener('click', closeBanIPModal);
+            document.getElementById('confirm-ban-ip-btn').removeEventListener('click', handleConfirmBanIP);
+            document.getElementById('admin-password-ban-ip').removeEventListener('input', handleBanIPPasswordInput);
+        }
+        
+        // 处理手动封禁IP地址密码输入
+        function handleBanIPPasswordInput() {
+            document.getElementById('admin-password-error-ban-ip').style.display = 'none';
+        }
+        
+        // 处理确认手动封禁IP地址
+        async function handleConfirmBanIP() {
+            const ipAddress = document.getElementById('manual-ip').value.trim();
+            const duration = document.getElementById('manual-ip-duration').value.trim();
+            const isPermanent = document.getElementById('manual-ip-permanent').value === 'true';
+            const password = document.getElementById('admin-password-ban-ip').value;
+            
+            // 验证密码
+            const isValidPassword = await validatePassword(password);
+            if (!isValidPassword) {
+                document.getElementById('admin-password-error-ban-ip').textContent = '密码错误，请重试';
+                document.getElementById('admin-password-error-ban-ip').style.display = 'block';
+                return;
+            }
+            
+            // 创建表单
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.style.display = 'none';
+            
+            // 添加表单字段
+            form.appendChild(createHiddenInput('action', 'ban_ip'));
+            form.appendChild(createHiddenInput('ip_address', ipAddress));
+            form.appendChild(createHiddenInput('ban_duration', isPermanent ? 0 : parseInt(duration) * 3600));
+            form.appendChild(createHiddenInput('is_permanent', isPermanent ? '1' : '0'));
+            form.appendChild(createHiddenInput('password', password));
+            
+            // 添加到页面并提交
+            document.body.appendChild(form);
+            form.submit();
+        }
+        
+        // 显示手动封禁浏览器指纹弹窗
+        function showBanFingerprintModal() {
+            const fingerprint = document.getElementById('manual-fingerprint').value.trim();
+            const duration = document.getElementById('manual-fingerprint-duration').value.trim();
+            const isPermanent = document.getElementById('manual-fingerprint-permanent').value === 'true';
+            
+            // 验证输入
+            if (!fingerprint) {
+                alert('请输入浏览器指纹');
+                return;
+            }
+            
+            if (!isPermanent && !duration) {
+                alert('请输入封禁时长');
+                return;
+            }
+            
+            // 设置弹窗内容
+            document.getElementById('ban-fingerprint-fingerprint').textContent = `浏览器指纹: ${fingerprint}`;
+            let details = '';
+            if (isPermanent) {
+                details = '封禁类型: 永久封禁';
+            } else {
+                details = `封禁类型: 临时封禁，时长: ${duration} 小时`;
+            }
+            document.getElementById('ban-fingerprint-details').textContent = details;
+            
+            // 重置表单
+            document.getElementById('admin-password-ban-fingerprint').value = '';
+            document.getElementById('admin-password-error-ban-fingerprint').style.display = 'none';
+            
+            // 显示弹窗
+            document.getElementById('ban-fingerprint-modal').style.display = 'flex';
+            
+            // 添加事件监听器
+            document.getElementById('cancel-ban-fingerprint-btn').addEventListener('click', closeBanFingerprintModal);
+            document.getElementById('confirm-ban-fingerprint-btn').addEventListener('click', handleConfirmBanFingerprint);
+            document.getElementById('admin-password-ban-fingerprint').addEventListener('input', handleBanFingerprintPasswordInput);
+        }
+        
+        // 关闭手动封禁浏览器指纹弹窗
+        function closeBanFingerprintModal() {
+            document.getElementById('ban-fingerprint-modal').style.display = 'none';
+            
+            // 移除事件监听器
+            document.getElementById('cancel-ban-fingerprint-btn').removeEventListener('click', closeBanFingerprintModal);
+            document.getElementById('confirm-ban-fingerprint-btn').removeEventListener('click', handleConfirmBanFingerprint);
+            document.getElementById('admin-password-ban-fingerprint').removeEventListener('input', handleBanFingerprintPasswordInput);
+        }
+        
+        // 处理手动封禁浏览器指纹密码输入
+        function handleBanFingerprintPasswordInput() {
+            document.getElementById('admin-password-error-ban-fingerprint').style.display = 'none';
+        }
+        
+        // 处理确认手动封禁浏览器指纹
+        async function handleConfirmBanFingerprint() {
+            const fingerprint = document.getElementById('manual-fingerprint').value.trim();
+            const duration = document.getElementById('manual-fingerprint-duration').value.trim();
+            const isPermanent = document.getElementById('manual-fingerprint-permanent').value === 'true';
+            const password = document.getElementById('admin-password-ban-fingerprint').value;
+            
+            // 验证密码
+            const isValidPassword = await validatePassword(password);
+            if (!isValidPassword) {
+                document.getElementById('admin-password-error-ban-fingerprint').textContent = '密码错误，请重试';
+                document.getElementById('admin-password-error-ban-fingerprint').style.display = 'block';
+                return;
+            }
+            
+            // 创建表单
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.style.display = 'none';
+            
+            // 添加表单字段
+            form.appendChild(createHiddenInput('action', 'ban_fingerprint'));
+            form.appendChild(createHiddenInput('fingerprint', fingerprint));
+            form.appendChild(createHiddenInput('ban_duration', isPermanent ? 0 : parseInt(duration) * 3600));
+            form.appendChild(createHiddenInput('is_permanent', isPermanent ? '1' : '0'));
+            form.appendChild(createHiddenInput('password', password));
+            
+            // 添加到页面并提交
+            document.body.appendChild(form);
+            form.submit();
+        }
+        
         // 执行修改用户名称操作
         function executeChangeUsername(newUsername, adminPassword) {
             // 创建表单
@@ -2997,5 +4385,98 @@ if (isset($_POST['action']) && in_array($_POST['action'], [
             closeChangeUsernameModal();
         }
     </script>
+            <!-- 违禁词管理 -->
+            <div id="prohibited_words" class="tab-content">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1200px; margin: 0 auto; padding: 20px 0;">
+                    <!-- 左侧区域 -->
+                    <div style="background: #f8f9fa; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; display: flex; flex-direction: column; gap: 20px;">
+                        <h3 style="margin: 0; color: #333; text-align: center;">违禁词管理</h3>
+                        
+                        <!-- 添加违禁词 -->
+                        <div>
+                            <h4 style="margin: 0 0 15px 0; color: #333;">添加违禁词</h4>
+                            <form method="POST" id="add-prohibited-word-form">
+                                <input type="hidden" name="action" value="add_prohibited_word">
+                                <!-- 违禁词输入框 -->
+                                <div style="margin-bottom: 10px;">
+                                    <input type="text" name="new_word" placeholder="请输入新的违禁词" required style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 管理员密码输入框 -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="add-password" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">管理员密码：</label>
+                                    <input type="password" id="add-password" name="password" required placeholder="请输入管理员密码" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 添加按钮 -->
+                                <div>
+                                    <button type="submit" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">添加</button>
+                                </div>
+                            </form>
+                        </div>
+                        
+                        <!-- 更新违禁词配置 -->
+                        <div>
+                            <h4 style="margin: 0 0 15px 0; color: #333;">违禁词配置</h4>
+                            <form method="POST" id="update-prohibited-word-config-form">
+                                <input type="hidden" name="action" value="update_prohibited_word_config">
+                                <!-- 每日最大警告次数 -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="max-warnings" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">每日最大警告次数：</label>
+                                    <input type="number" id="max-warnings" name="max_warnings" min="1" value="<?php echo isset($prohibited_words_config['max_warnings_per_day']) ? $prohibited_words_config['max_warnings_per_day'] : 10; ?>" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 首次封禁时长（小时） -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="ban-time" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">首次封禁时长（小时）：</label>
+                                    <input type="number" id="ban-time" name="ban_time" min="1" value="<?php echo isset($prohibited_words_config['ban_time']) ? $prohibited_words_config['ban_time'] : 24; ?>" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 最大封禁时长（天） -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="max-ban-time" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">最大封禁时长（天）：</label>
+                                    <input type="number" id="max-ban-time" name="max_ban_time" min="1" value="<?php echo isset($prohibited_words_config['max_ban_time']) ? $prohibited_words_config['max_ban_time'] : 30; ?>" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 永久封禁阈值（天） -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="permanent-ban-days" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">永久封禁阈值（天）：</label>
+                                    <input type="number" id="permanent-ban-days" name="permanent_ban_days" min="1" value="<?php echo isset($prohibited_words_config['permanent_ban_days']) ? $prohibited_words_config['permanent_ban_days'] : 365; ?>" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 管理员密码输入框 -->
+                                <div style="margin-bottom: 10px;">
+                                    <label for="config-password" style="font-weight: 500; color: #333; display: block; margin-bottom: 5px;">管理员密码：</label>
+                                    <input type="password" id="config-password" name="password" required placeholder="请输入管理员密码" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%;">
+                                </div>
+                                <!-- 保存配置按钮 -->
+                                <div>
+                                    <button type="submit" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">保存配置</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- 右侧区域 -->
+                    <div style="background: #f8f9fa; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                        <!-- 右侧区域可以根据需要添加内容 -->
+                        <h3 style="margin: 0 0 20px 0; color: #333; text-align: center;">数据统计</h3>
+                        <div style="display: flex; flex-direction: column; gap: 15px;">
+                            <div style="text-align: center; padding: 15px; background: white; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #667eea;"><?php echo $ban_stats['today_warnings']; ?></div>
+                                <div style="color: #666;">今日警告次数</div>
+                            </div>
+                            <div style="text-align: center; padding: 15px; background: white; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #667eea;"><?php echo $ban_stats['today_bans']; ?></div>
+                                <div style="color: #666;">今日封禁人数</div>
+                            </div>
+                            <div style="text-align: center; padding: 15px; background: white; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #667eea;"><?php echo $ban_stats['total_warnings']; ?></div>
+                                <div style="color: #666;">累计警告次数</div>
+                            </div>
+                            <div style="text-align: center; padding: 15px; background: white; border: 1px solid #e0e0e0; border-radius: 8px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #667eea;"><?php echo $ban_stats['total_bans']; ?></div>
+                                <div style="color: #666;">累计封禁人数</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+
 </body>
 </html>

@@ -6916,7 +6916,89 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         }
 
         // 截图功能
-
+        async function takeScreenshot() {
+            try {
+                // 检查navigator.mediaDevices和getDisplayMedia是否可用
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                    alert('截图功能不可用：您的浏览器不支持屏幕捕获');
+                    return;
+                }
+                
+                // 请求屏幕捕获
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { cursor: 'always' },
+                    audio: false
+                });
+                
+                // 创建视频元素来显示流
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                
+                // 使用Promise确保视频元数据加载完成
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = resolve;
+                });
+                
+                // 播放视频
+                await video.play();
+                
+                // 创建Canvas元素
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // 绘制视频帧到Canvas
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // 停止流
+                stream.getTracks().forEach(track => track.stop());
+                
+                // 将Canvas转换为Blob，使用Promise处理
+                const blob = await new Promise((resolve) => {
+                    canvas.toBlob(resolve, 'image/png');
+                });
+                
+                if (blob) {
+                    // 创建文件对象
+                    const screenshotFile = new File([blob], `screenshot_${Date.now()}.png`, {
+                        type: 'image/png'
+                    });
+                    
+                    // 创建DataTransfer对象
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(screenshotFile);
+                    
+                    // 将文件添加到file-input中
+                    const fileInput = document.getElementById('file-input');
+                    if (fileInput) {
+                        fileInput.files = dataTransfer.files;
+                        
+                        // 触发change事件，自动提交表单
+                        const event = new Event('change', { bubbles: true });
+                        fileInput.dispatchEvent(event);
+                    } else {
+                        console.error('未找到file-input元素');
+                        alert('截图失败：未找到文件输入元素');
+                    }
+                } else {
+                    console.error('Canvas转换为Blob失败');
+                    alert('截图失败：无法处理截图数据');
+                }
+            } catch (error) {
+                console.error('截图失败:', error);
+                // 根据错误类型提供更具体的提示
+                if (error.name === 'NotAllowedError') {
+                    alert('截图失败：您拒绝了屏幕捕获请求');
+                } else if (error.name === 'NotFoundError') {
+                    alert('截图失败：未找到可捕获的屏幕');
+                } else if (error.name === 'NotReadableError') {
+                    alert('截图失败：无法访问屏幕内容');
+                } else {
+                    alert(`截图失败：${error.message || '请重试'}`);
+                }
+            }
+        }
 
         // 初始化视频播放器
         function initVideoPlayer() {

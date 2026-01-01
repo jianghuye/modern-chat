@@ -197,6 +197,53 @@ CREATE TABLE IF NOT EXISTS group_invitations (
     UNIQUE KEY unique_invitation (group_id, inviter_id, invitee_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 创建未读消息计数表
+CREATE TABLE IF NOT EXISTS unread_messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    chat_type ENUM('friend', 'group') NOT NULL,
+    chat_id INT NOT NULL,
+    count INT DEFAULT 0,
+    last_message_id INT DEFAULT 0,
+    UNIQUE KEY unique_chat (user_id, chat_type, chat_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建违禁词封禁表
+CREATE TABLE IF NOT EXISTS prohibited_word_bans (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    ban_reason TEXT NOT NULL,
+    ban_type ENUM('temporary', 'permanent') DEFAULT 'temporary',
+    ban_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ban_end TIMESTAMP NULL,
+    warnings_count INT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建违禁词警告表
+CREATE TABLE IF NOT EXISTS prohibited_word_warnings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    prohibited_word VARCHAR(100) NOT NULL,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建聊天设置表
+CREATE TABLE IF NOT EXISTS chat_settings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    chat_type ENUM('friend', 'group') NOT NULL,
+    chat_id INT NOT NULL,
+    is_muted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_user_chat (user_id, chat_type, chat_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 创建入群申请表
 CREATE TABLE IF NOT EXISTS group_join_requests (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -245,6 +292,18 @@ CREATE TABLE IF NOT EXISTS group_ban_logs (
     action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (ban_id) REFERENCES group_bans(id) ON DELETE CASCADE,
     FOREIGN KEY (action_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建@提醒表
+CREATE TABLE IF NOT EXISTS mentions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    message_id INT NOT NULL,
+    message_type ENUM('friend', 'group') NOT NULL,
+    mentioned_user_id INT NOT NULL,
+    sender_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (mentioned_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 创建索引以提高查询性能

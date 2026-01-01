@@ -166,6 +166,23 @@ require_once 'Group.php';
     // 检查用户是否被封禁
     function checkUserBanStatus($user_id, $conn) {
         try {
+            // 先检查 prohibited_word_bans 表是否存在
+            $stmt = $conn->prepare("SHOW TABLES LIKE 'prohibited_word_bans'");
+            $stmt->execute();
+            if (!$stmt->fetch()) {
+                // 创建 prohibited_word_bans 表
+                $conn->exec("CREATE TABLE IF NOT EXISTS prohibited_word_bans (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    ban_reason TEXT NOT NULL,
+                    ban_type ENUM('temporary', 'permanent') DEFAULT 'temporary',
+                    ban_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ban_end TIMESTAMP NULL,
+                    warnings_count INT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )");
+            }
+            
             // 检查用户是否有活跃的封禁记录
             $stmt = $conn->prepare("SELECT * FROM prohibited_word_bans WHERE user_id = ? AND (ban_end IS NULL OR ban_end > NOW())");
             $stmt->execute([$user_id]);
@@ -438,8 +455,8 @@ require_once 'Group.php';
             $file_info = [
                 'file_path' => $file_result['file_path'],
                 'file_name' => $file_result['file_name'],
-                'file_size' => $file_result['file_size'],
-                'file_type' => $file_result['file_type']
+                'file_size' => $file_result['file_size']
+                // 移除file_type，因为FileUpload->upload()方法不返回file_type
             ];
             $result = $group->sendGroupMessage($selected_id, $user_id, '', $file_info);
             error_log("Send Group File Message Result: " . print_r($result, true));

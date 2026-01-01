@@ -7038,6 +7038,12 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         // 截图功能
         async function takeScreenshot() {
             try {
+                // 检查navigator.mediaDevices和getDisplayMedia是否可用
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                    alert('截图功能不可用：您的浏览器不支持屏幕捕获');
+                    return;
+                }
+                
                 // 请求屏幕捕获
                 const stream = await navigator.mediaDevices.getDisplayMedia({
                     video: { cursor: 'always' },

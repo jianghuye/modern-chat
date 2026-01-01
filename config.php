@@ -86,20 +86,6 @@ function getEnvVar($key, $default = '') {
     return $default;
 }
 
-// 数据库配置
-define('DB_HOST', getEnvVar('DB_HOST') ?: getEnvVar('DB_HOSTNAME') ?: 'localhost');
-define('DB_NAME', getEnvVar('DB_NAME') ?: getEnvVar('DATABASE_NAME') ?: 'chat');
-define('DB_USER', getEnvVar('DB_USER') ?: getEnvVar('DB_USERNAME') ?: 'root');
-define('DB_PASS', getEnvVar('DB_PASS') ?: getEnvVar('DB_PASSWORD') ?: getEnvVar('MYSQL_ROOT_PASSWORD') ?: getConfig('db_password') ?: 'cf211396ab9363ad');
-
-// 应用配置
-define('APP_NAME', 'Modern Chat');
-define('APP_URL', 'http://localhost/chat');
-
-// 安全配置
-define('HASH_ALGO', PASSWORD_DEFAULT);
-define('HASH_COST', 12);
-
 // 错误报告配置
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -153,6 +139,35 @@ function getConfig($key = null, $default = null) {
 function getUserNameMaxLength() {
     return getConfig('user_name_max', 12);
 }
+
+// IP地址获取函数
+function getUserIP() {
+    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
+        return $_SERVER['HTTP_CLIENT_IP'];
+    } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        return explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0];
+    } else {
+        return $_SERVER['REMOTE_ADDR'];
+    }
+}
+
+// 数据库配置
+define('DB_HOST', getEnvVar('DB_HOST') ?: getEnvVar('DB_HOSTNAME') ?: 'localhost');
+define('DB_NAME', getEnvVar('DB_NAME') ?: getEnvVar('DATABASE_NAME') ?: 'chat');
+define('DB_USER', getEnvVar('DB_USER') ?: getEnvVar('DB_USERNAME') ?: 'root');
+define('DB_PASS', getEnvVar('DB_PASS') ?: getEnvVar('DB_PASSWORD') ?: getEnvVar('MYSQL_ROOT_PASSWORD') ?: getConfig('db_password') ?: 'cf211396ab9363ad');
+
+// 应用配置
+define('APP_NAME', 'Modern Chat');
+define('APP_URL', 'http://localhost/chat');
+
+// 安全配置
+define('HASH_ALGO', PASSWORD_DEFAULT);
+define('HASH_COST', 12);
+
+// 登录安全配置
+define('MAX_LOGIN_ATTEMPTS', getConfig('Number_of_incorrect_password_attempts', 10));
+define('DEFAULT_BAN_DURATION', getConfig('Limit_login_duration', 24) * 3600); // 默认24小时，转换为秒
 
 // 上传配置
 define('UPLOAD_DIR', 'uploads/');

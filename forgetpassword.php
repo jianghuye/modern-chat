@@ -359,20 +359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <input type="email" id="email" name="email" required>
             </div>
             
-            <div id="password-fields" style="display: none;">
-                <div class="form-group">
-                    <label for="new_password">新密码</label>
-                    <input type="password" id="new_password" name="new_password" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="confirm_password">确认新密码</label>
-                    <input type="password" id="confirm_password" name="confirm_password" required>
-                </div>
-                
-                <p class="password-requirements">密码必须包含至少2种字符类型（大小写字母、数字、特殊符号）</p>
-            </div>
-            
             <button type="submit" class="btn">获取密保问题</button>
         </form>
         

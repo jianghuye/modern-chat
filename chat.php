@@ -902,16 +902,16 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             display: flex;
             align-items: center;
             background: #f8f9fa;
-            border-radius: 20px;
-            padding: 25px 30px;
+            border-radius: 15px;
+            padding: 10px 15px;
             max-width: 100%;
-            width: auto;
+            width: 320px;
             position: relative;
-            z-index: 2000;
-            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
             transition: all 0.2s ease;
             height: auto;
-            min-height: 120px;
+            min-height: 60px;
             overflow: visible;
             border: 2px solid transparent;
         }
@@ -940,8 +940,8 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         }
         
         .audio-play-btn {
-            width: 60px;
-            height: 60px;
+            width: 45px;
+            height: 45px;
             border: none;
             background: linear-gradient(135deg, #12b7f5 0%, #00a2e8 100%);
             color: white;
@@ -950,11 +950,11 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 30px;
+            margin-right: 15px;
             transition: all 0.2s ease;
             z-index: 2001;
             position: relative;
-            box-shadow: 0 5px 18px rgba(18, 183, 245, 0.5);
+            box-shadow: 0 4px 12px rgba(18, 183, 245, 0.5);
         }
         
         .audio-play-btn:hover {
@@ -992,33 +992,33 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         
         .audio-progress-container {
             flex: 1;
-            margin: 0 30px;
+            margin: 0 15px;
             position: relative;
             z-index: 2001;
         }
         
         .audio-progress-bar {
             width: 100%;
-            height: 24px;
+            height: 16px;
             background: #e9ecef;
-            border-radius: 12px;
+            border-radius: 8px;
             cursor: pointer;
             overflow: visible;
             position: relative;
             z-index: 2002;
             pointer-events: all;
             transition: all 0.2s ease;
-            border: 2px solid #dee2e6;
+            border: 1px solid #dee2e6;
         }
         
         .audio-progress-bar:hover {
-            height: 28px;
+            height: 20px;
         }
         
         .audio-progress {
             height: 100%;
             background: linear-gradient(90deg, #12b7f5 0%, #00a2e8 100%);
-            border-radius: 10px;
+            border-radius: 7px;
             transition: width 0.1s ease;
             position: relative;
             z-index: 2003;
@@ -1027,28 +1027,28 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         .audio-progress::after {
             content: '';
             position: absolute;
-            right: -20px;
+            right: -15px;
             top: 50%;
             transform: translateY(-50%);
-            width: 42px;
-            height: 42px;
+            width: 30px;
+            height: 30px;
             background: white;
             border-radius: 50%;
-            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
             z-index: 2004;
             transition: all 0.2s ease;
             cursor: pointer;
-            border: 4px solid #12b7f5;
+            border: 3px solid #12b7f5;
         }
         
         .audio-progress-bar:hover .audio-progress::after {
-            transform: translateY(-50%) scale(1.4);
+            transform: translateY(-50%) scale(1.2);
         }
         
         .audio-time {
-            font-size: 20px;
+            font-size: 16px;
             color: #495057;
-            min-width: 70px;
+            min-width: 60px;
             text-align: center;
             font-weight: 700;
             margin: 0 10px;
@@ -1316,7 +1316,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         
         /* 确保文件操作菜单显示在最上层 */
         .file-actions-menu {
-            z-index: 3000;
+            z-index: 3000 !important;
         }
         
         /* 图片查看器样式 */
@@ -2861,13 +2861,28 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         $group_unread_key = 'group_' . $group_item['id'];
                         $group_unread_count = isset($unread_counts[$group_unread_key]) ? $unread_counts[$group_unread_key] : 0;
                         $is_active = $chat_type === 'group' && $selected_id == $group_item['id'];
+                        
+                        // 检查是否有@提及
+                        $has_mention = false;
+                        try {
+                            $stmt = $conn->prepare("SELECT has_mention FROM chat_settings WHERE user_id = ? AND chat_type = 'group' AND chat_id = ? AND has_mention = TRUE");
+                            $stmt->execute([$user_id, $group_item['id']]);
+                            $has_mention = $stmt->fetch() !== false;
+                        } catch (PDOException $e) {
+                            // 表不存在或查询失败，忽略
+                        }
                     ?>
                     <div class="chat-item <?php echo $is_active ? 'active' : ''; ?>" data-group-id="<?php echo $group_item['id']; ?>" data-chat-type="group">
                         <div class="chat-avatar group">
                             👥
                         </div>
                         <div class="chat-info">
-                            <div class="chat-name"><?php echo htmlspecialchars($group_item['name']); ?></div>
+                            <div class="chat-name">
+                                <?php echo htmlspecialchars($group_item['name']); ?>
+                                <?php if ($has_mention): ?>
+                                    <span class="mention-badge">[有人@你]</span>
+                                <?php endif; ?>
+                            </div>
                             <div class="chat-last-message">
                                 <?php if ($group_item['all_user_group'] == 1): ?>
                                     全员群聊
@@ -3013,13 +3028,8 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                                             echo "</div>";
                                             echo "<span class='audio-time current-time'>0:00</span>";
                                             echo "<span class='audio-duration'>0:00</span>";
-                                            // 音频操作按钮
-                                            echo "<div style='position: relative; display: inline-block; margin-left: 10px; z-index: 4000;'>";
-                                            echo "<button class='media-action-btn' onclick=\"event.stopPropagation(); toggleMediaActionsMenu(event, this)\" style='width: 28px; height: 28px; font-size: 14px; background: rgba(0,0,0,0.1); border: none; border-radius: 50%; color: #666; cursor: pointer; z-index: 4000; position: relative;'>⋮</button>";
-                                            echo "<div class='file-actions-menu' style='display: none; position: absolute; top: 35px; right: 0; background: white; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); padding: 8px 0; z-index: 5000;'>";
-                                            echo "<button class='file-action-item' onclick=\"event.stopPropagation(); addDownloadTask('".htmlspecialchars($file_name, ENT_QUOTES)."', '".htmlspecialchars($file_path, ENT_QUOTES)."', ".htmlspecialchars($file_size).", 'audio');\" style='display: block; width: 100%; padding: 8px 16px; text-align: left; border: none; background: none; cursor: pointer; font-size: 14px; color: #333; transition: background-color 0.2s ease;'>下载</button>";
-                                            echo "</div>";
-                                            echo "</div>";
+                                            // 直接添加下载图标按钮
+                                            echo "<button class='media-action-btn' onclick=\"event.stopPropagation(); addDownloadTask('".htmlspecialchars($file_name, ENT_QUOTES)."', '".htmlspecialchars($file_path, ENT_QUOTES)."', ".htmlspecialchars($file_size).", 'audio');\" title='下载' style='width: 28px; height: 28px; font-size: 16px; background: rgba(0,0,0,0.1); border: none; border-radius: 50%; color: #666; cursor: pointer; margin-left: 10px; z-index: 4000; position: relative;'>⬇</button>";
                                             echo "</div>";
                                             echo "</div>";
                                         } elseif (in_array($ext, $video_exts)) {
@@ -3107,6 +3117,8 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                                             echo "</div>";
                                             echo "<span class='audio-time current-time'>0:00</span>";
                                             echo "<span class='audio-duration'>0:00</span>";
+                                            // 直接添加下载图标按钮
+                                            echo "<button class='media-action-btn' onclick=\"event.stopPropagation(); addDownloadTask('".htmlspecialchars($file_name, ENT_QUOTES)."', '".htmlspecialchars($file_path, ENT_QUOTES)."', ".htmlspecialchars($file_size).", 'audio');\" title='下载' style='width: 28px; height: 28px; font-size: 16px; background: rgba(0,0,0,0.1); border: none; border-radius: 50%; color: #666; cursor: pointer; margin-left: 10px; z-index: 4000; position: relative;'>⬇</button>";
                                             echo "</div>";
                                             echo "</div>";
                                         } elseif (in_array($ext, $video_exts)) {
@@ -3159,6 +3171,21 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         <span class="recording-dots">● ● ●</span> 录音中...
                     </div>
                     
+                    <!-- @提及用户列表 -->
+                    <div id="mention-list" class="mention-list" style="
+                        display: none;
+                        position: absolute;
+                        bottom: 80px;
+                        left: 20px;
+                        background: white;
+                        border-radius: 8px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                        max-height: 200px;
+                        overflow-y: auto;
+                        z-index: 1000;
+                        min-width: 200px;
+                    "></div>
+                    
                     <div class="input-container">
                         <div class="input-wrapper">
                             <textarea id="message-input" placeholder="输入消息..." rows="1" style="font-family: 'Microsoft YaHei', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; line-height: 1.5;"></textarea>
@@ -3173,6 +3200,72 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         </div>
                     </div>
                 </div>
+                
+                <!-- @提及样式 -->
+                <style>
+                    .mention-item {
+                        padding: 10px 15px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        transition: background-color 0.2s ease;
+                    }
+                    
+                    .mention-item:hover {
+                        background-color: #f5f5f5;
+                    }
+                    
+                    .mention-item.active {
+                        background-color: #e6f7ff;
+                    }
+                    
+                    .mention-avatar {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 50%;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: white;
+                        font-weight: 600;
+                        font-size: 14px;
+                    }
+                    
+                    .mention-info {
+                        flex: 1;
+                    }
+                    
+                    .mention-username {
+                        font-weight: 600;
+                        font-size: 14px;
+                    }
+                    
+                    .mention-nickname {
+                        font-size: 12px;
+                        color: #999;
+                    }
+                    
+                    .mention-all {
+                        color: #ff4d4f;
+                        font-weight: 600;
+                    }
+                    
+                    .message-text .mention {
+                        color: #12b7f5;
+                        font-weight: 600;
+                    }
+                    
+                    .mention-badge {
+                        background: #ff4d4f;
+                        color: white;
+                        font-size: 10px;
+                        padding: 2px 6px;
+                        border-radius: 10px;
+                        margin-left: 5px;
+                    }
+                </style>
                 
                 <!-- 全局录音提示 -->
                 <div id="recording-hint" style="display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.8); color: white; padding: 10px 20px; border-radius: 20px; font-size: 14px; z-index: 1000;">
@@ -3197,6 +3290,265 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
     <script>
         // 检查群聊是否被封禁
         let isGroupBanned = false;
+        
+        // @提及功能相关变量
+        let mentionListVisible = false;
+        let currentMentions = [];
+        let selectedMentionIndex = -1;
+        let groupMembers = [];
+        
+        // 获取群聊成员列表
+        async function getGroupMembers(groupId) {
+            try {
+                const response = await fetch(`get_group_members.php?group_id=${groupId}`);
+                const data = await response.json();
+                if (data.success) {
+                    return data.members;
+                }
+                return [];
+            } catch (error) {
+                console.error('获取群成员失败:', error);
+                return [];
+            }
+        }
+        
+        // 初始化群聊成员
+        async function initGroupMembers() {
+            const chatType = '<?php echo $chat_type; ?>';
+            const groupId = '<?php echo $selected_id; ?>';
+            
+            if (chatType === 'group') {
+                groupMembers = await getGroupMembers(groupId);
+            }
+        }
+        
+        // 初始化@提及功能
+        function initMentionFeature() {
+            const input = document.getElementById('message-input');
+            const mentionList = document.getElementById('mention-list');
+            
+            if (!input || !mentionList) return;
+            
+            // 初始化群成员
+            initGroupMembers();
+            
+            // 输入事件监听
+            input.addEventListener('input', handleMentionInput);
+            
+            // 按键事件监听
+            input.addEventListener('keydown', handleMentionKeydown);
+            
+            // 点击外部关闭提及列表
+            document.addEventListener('click', (e) => {
+                if (!input.contains(e.target) && !mentionList.contains(e.target)) {
+                    hideMentionList();
+                }
+            });
+        }
+        
+        // 处理输入事件，检测@符号
+        function handleMentionInput(e) {
+            const input = e.target;
+            const cursorPos = input.selectionStart;
+            const text = input.value;
+            
+            // 查找@符号的位置
+            const atIndex = text.lastIndexOf('@', cursorPos - 1);
+            
+            // 检查@符号是否在有效位置
+            if (atIndex !== -1) {
+                // 提取@符号后的文字（直到空格或光标位置）
+                const afterAt = text.substring(atIndex + 1, cursorPos);
+                
+                // 检查@符号后是否有空格
+                if (afterAt.includes(' ')) {
+                    // 有空格，隐藏提及列表
+                    hideMentionList();
+                    return;
+                }
+                
+                // 显示提及列表，并传递搜索关键词
+                showMentionList(input, atIndex + 1, afterAt);
+            } else {
+                // 没有@符号，隐藏提及列表
+                hideMentionList();
+            }
+        }
+        
+        // 显示提及列表
+        function showMentionList(input, startIndex, searchKeyword = '') {
+            const mentionList = document.getElementById('mention-list');
+            const chatType = '<?php echo $chat_type; ?>';
+            
+            // 只有群聊才显示提及列表
+            if (chatType !== 'group') {
+                hideMentionList();
+                return;
+            }
+            
+            // 准备成员数据，添加"全体成员"作为第一个选项
+            const mentionOptions = [
+                { id: 'all', username: '全体成员', is_all: true }
+            ];
+            
+            // 添加群成员
+            groupMembers.forEach(member => {
+                mentionOptions.push({
+                    id: member.id,
+                    username: member.username,
+                    nickname: member.nickname || '',
+                    avatar: member.avatar
+                });
+            });
+            
+            // 根据搜索关键词过滤成员
+            let filteredOptions = mentionOptions;
+            if (searchKeyword) {
+                const keyword = searchKeyword.toLowerCase();
+                filteredOptions = mentionOptions.filter(member => {
+                    // "全体成员"始终显示
+                    if (member.is_all) {
+                        return true;
+                    }
+                    // 搜索用户名或昵称
+                    return member.username.toLowerCase().includes(keyword) || 
+                           member.nickname.toLowerCase().includes(keyword);
+                });
+            }
+            
+            // 渲染提及列表
+            let html = '';
+            
+            if (filteredOptions.length === 0) {
+                // 无搜索结果
+                html = `<div class="mention-item no-results" style="color: #999; cursor: default; text-align: center; padding: 10px;">
+                            无搜索结果
+                        </div>`;
+            } else {
+                // 渲染过滤后的成员列表
+                html = filteredOptions.map((member, index) => {
+                    const isAll = member.is_all;
+                    return `
+                        <div class="mention-item" data-id="${member.id}" data-username="${member.username}" data-is-all="${isAll}">
+                            <div class="mention-avatar">
+                                ${isAll ? '👥' : member.avatar ? `<img src="${member.avatar}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">` : member.username.charAt(0).toUpperCase()}
+                            </div>
+                            <div class="mention-info">
+                                <div class="mention-username ${isAll ? 'mention-all' : ''}">${member.username}</div>
+                                ${member.nickname ? `<div class="mention-nickname">${member.nickname}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+            
+            mentionList.innerHTML = html;
+            
+            // 显示列表
+            mentionList.style.display = 'block';
+            mentionListVisible = true;
+            selectedMentionIndex = -1;
+            
+            // 添加点击事件
+            mentionList.querySelectorAll('.mention-item:not(.no-results)').forEach(item => {
+                item.addEventListener('click', () => {
+                    selectMention(item, input, startIndex);
+                });
+            });
+        }
+        
+        // 隐藏提及列表
+        function hideMentionList() {
+            const mentionList = document.getElementById('mention-list');
+            mentionList.style.display = 'none';
+            mentionListVisible = false;
+            selectedMentionIndex = -1;
+        }
+        
+        // 处理按键事件
+        function handleMentionKeydown(e) {
+            const mentionList = document.getElementById('mention-list');
+            const items = mentionList.querySelectorAll('.mention-item');
+            
+            if (!mentionListVisible) return;
+            
+            switch (e.key) {
+                case 'ArrowUp':
+                    e.preventDefault();
+                    selectedMentionIndex = Math.max(0, selectedMentionIndex - 1);
+                    updateSelectedMention(items);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    selectedMentionIndex = Math.min(items.length - 1, selectedMentionIndex + 1);
+                    updateSelectedMention(items);
+                    break;
+                case 'Enter':
+                    e.preventDefault();
+                    if (selectedMentionIndex >= 0 && selectedMentionIndex < items.length) {
+                        const input = document.getElementById('message-input');
+                        const cursorPos = input.selectionStart;
+                        const atIndex = input.value.lastIndexOf('@', cursorPos - 1);
+                        selectMention(items[selectedMentionIndex], input, atIndex + 1);
+                    }
+                    break;
+                case 'Escape':
+                    hideMentionList();
+                    break;
+            }
+        }
+        
+        // 更新选中的提及项
+        function updateSelectedMention(items) {
+            items.forEach((item, index) => {
+                if (index === selectedMentionIndex) {
+                    item.classList.add('active');
+                    item.scrollIntoView({ block: 'nearest' });
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+        
+        // 选择提及项
+        function selectMention(item, input, startIndex) {
+            const username = item.dataset.username;
+            const isAll = item.dataset.isAll === 'true';
+            const mentionText = isAll ? `@全体成员 ` : `@${username} `;
+            
+            const value = input.value;
+            const cursorPos = input.selectionStart;
+            
+            // 替换@符号及其后的内容为选中的用户名
+            const newValue = value.substring(0, startIndex - 1) + mentionText + value.substring(cursorPos);
+            input.value = newValue;
+            
+            // 设置光标位置
+            const newCursorPos = startIndex - 1 + mentionText.length;
+            input.setSelectionRange(newCursorPos, newCursorPos);
+            input.focus();
+            
+            // 隐藏提及列表
+            hideMentionList();
+        }
+        
+        // 页面加载完成后初始化@功能
+        document.addEventListener('DOMContentLoaded', () => {
+            initMentionFeature();
+        });
+        
+        // 切换聊天时重新初始化群成员并重置@提及标记
+        function switchChat(chatType, chatId) {
+            if (chatType === 'group') {
+                initGroupMembers();
+                
+                // 重置@提及标记
+                fetch(`reset_mention.php?chat_type=group&chat_id=${chatId}`)
+                    .catch(error => {
+                        console.error('重置@提及标记失败:', error);
+                    });
+            }
+        }
         
         function checkGroupBanStatus(groupId) {
             return fetch(`check_group_ban.php?group_id=${groupId}`)
@@ -3253,7 +3605,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     <p>预计解封时长：${banEnd ? new Date(banEnd).toLocaleString() : '永久'}</p>
                     <p style="color: #ff4757; margin-top: 15px;">群聊被封禁期间，无法使用任何群聊功能</p>
                 </div>
-                <button onclick="document.body.removeChild(modal); window.location.href='Newchat.php'" style="
+                <button onclick="document.body.removeChild(modal); window.location.href='chat.php'" style="
                     padding: 12px 30px;
                     background: #667eea;
                     color: white;
@@ -3292,7 +3644,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                 document.getElementById('groups-list').style.display = chatType === 'group' ? 'block' : 'none';
                 
                 // 重新加载页面
-                window.location.href = `Newchat.php?chat_type=${chatType}`;
+                window.location.href = `chat.php?chat_type=${chatType}`;
             });
         });
         
@@ -3308,10 +3660,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     
                     if (this.dataset.friendId) {
                         const friendId = this.dataset.friendId;
-                        window.location.href = `Newchat.php?chat_type=friend&id=${friendId}`;
+                        window.location.href = `chat.php?chat_type=friend&id=${friendId}`;
                     } else if (this.dataset.groupId) {
                         const groupId = this.dataset.groupId;
-                        window.location.href = `Newchat.php?chat_type=group&id=${groupId}`;
+                        window.location.href = `chat.php?chat_type=group&id=${groupId}`;
                     }
                 });
             });
@@ -3647,35 +3999,35 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             
             // 生成统计HTML
             let statsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
-                    <div style="background: #f0f8ff; padding: 15px; border-radius: 8px; border-left: 4px solid #12b7f5;">
-                        <h3 style="margin: 0 0 10px 0; color: #12b7f5;">音频文件</h3>
-                        <p style="margin: 0; font-size: 24px; font-weight: 600; color: #333;">${cacheInfo.audio.count}</p>
-                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #666;">总大小: ${formatFileSize(cacheInfo.audio.size)}</p>
+                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                    <div style="background: #f0f8ff; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #12b7f5;">
+                        <h3 style="margin: 0 0 6px 0; color: #12b7f5; font-size: 14px; font-weight: 600;">音频文件</h3>
+                        <p style="margin: 0; font-size: 20px; font-weight: 600; color: #333;">${cacheInfo.audio.count}</p>
+                        <p style="margin: 3px 0 0 0; font-size: 12px; color: #666;">总大小: ${formatFileSize(cacheInfo.audio.size)}</p>
                     </div>
                     
-                    <div style="background: #f0fff4; padding: 15px; border-radius: 8px; border-left: 4px solid #52c41a;">
-                        <h3 style="margin: 0 0 10px 0; color: #52c41a;">视频文件</h3>
-                        <p style="margin: 0; font-size: 24px; font-weight: 600; color: #333;">${cacheInfo.video.count}</p>
-                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #666;">总大小: ${formatFileSize(cacheInfo.video.size)}</p>
+                    <div style="background: #f0fff4; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #52c41a;">
+                        <h3 style="margin: 0 0 6px 0; color: #52c41a; font-size: 14px; font-weight: 600;">视频文件</h3>
+                        <p style="margin: 0; font-size: 20px; font-weight: 600; color: #333;">${cacheInfo.video.count}</p>
+                        <p style="margin: 3px 0 0 0; font-size: 12px; color: #666;">总大小: ${formatFileSize(cacheInfo.video.size)}</p>
                     </div>
                     
-                    <div style="background: #fffbe6; padding: 15px; border-radius: 8px; border-left: 4px solid #faad14;">
-                        <h3 style="margin: 0 0 10px 0; color: #faad14;">图片文件</h3>
-                        <p style="margin: 0; font-size: 24px; font-weight: 600; color: #333;">${cacheInfo.image.count}</p>
-                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #666;">总大小: ${formatFileSize(cacheInfo.image.size)}</p>
+                    <div style="background: #fffbe6; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #faad14;">
+                        <h3 style="margin: 0 0 6px 0; color: #faad14; font-size: 14px; font-weight: 600;">图片文件</h3>
+                        <p style="margin: 0; font-size: 20px; font-weight: 600; color: #333;">${cacheInfo.image.count}</p>
+                        <p style="margin: 3px 0 0 0; font-size: 12px; color: #666;">总大小: ${formatFileSize(cacheInfo.image.size)}</p>
                     </div>
                     
-                    <div style="background: #fff2f0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff4d4f;">
-                        <h3 style="margin: 0 0 10px 0; color: #ff4d4f;">其他文件</h3>
-                        <p style="margin: 0; font-size: 24px; font-weight: 600; color: #333;">${cacheInfo.file.count}</p>
-                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #666;">总大小: ${formatFileSize(cacheInfo.file.size)}</p>
+                    <div style="background: #fff2f0; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #ff4d4f;">
+                        <h3 style="margin: 0 0 6px 0; color: #ff4d4f; font-size: 14px; font-weight: 600;">其他文件</h3>
+                        <p style="margin: 0; font-size: 20px; font-weight: 600; color: #333;">${cacheInfo.file.count}</p>
+                        <p style="margin: 3px 0 0 0; font-size: 12px; color: #666;">总大小: ${formatFileSize(cacheInfo.file.size)}</p>
                     </div>
                 </div>
-                <div style="margin-top: 20px; padding: 15px; background: #fafafa; border-radius: 8px; text-align: center;">
-                    <h3 style="margin: 0 0 10px 0; color: #333;">总计</h3>
-                    <p style="margin: 0; font-size: 28px; font-weight: 600; color: #333;">${cacheInfo.total.count}</p>
-                    <p style="margin: 5px 0 0 0; font-size: 16px; color: #666;">总大小: ${formatFileSize(cacheInfo.total.size)}</p>
+                <div style="margin-top: 15px; padding: 12px; background: #fafafa; border-radius: 6px; text-align: center;">
+                    <h3 style="margin: 0 0 6px 0; color: #333; font-size: 16px; font-weight: 600;">总计</h3>
+                    <p style="margin: 0; font-size: 24px; font-weight: 600; color: #333;">${cacheInfo.total.count}</p>
+                    <p style="margin: 3px 0 0 0; font-size: 14px; color: #666;">总大小: ${formatFileSize(cacheInfo.total.size)}</p>
                 </div>
             `;
             
@@ -3698,7 +4050,11 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             // 遍历cookie，查找缓存相关的cookie
             cookies.forEach(cookie => {
                 const cookieTrimmed = cookie.trim();
-                if (cookieTrimmed.startsWith('file_')) {
+                // 检查是否是缓存相关的cookie（支持多种前缀）
+                if (cookieTrimmed.startsWith('file_') || 
+                    cookieTrimmed.startsWith('video_') || 
+                    cookieTrimmed.startsWith('audio_') || 
+                    cookieTrimmed.startsWith('Picture_')) {
                     // 这是一个缓存文件的cookie
                     cacheInfo.total.count++;
                     
@@ -4185,9 +4541,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             }
             
             // 检查文件大小是否超过限制
-            const maxFileSize = <?php echo getConfig('upload_files_max', 50 * 1024 * 1024); ?>; // 默认50MB
+            const uploadMaxConfig = <?php echo getConfig('upload_files_max', 50); ?>; // 默认50MB
+            const maxFileSize = uploadMaxConfig * 1024 * 1024; // 转换为字节
             if (file.size > maxFileSize) {
-                const maxSizeMB = (maxFileSize / (1024 * 1024)).toFixed(1);
+                const maxSizeMB = uploadMaxConfig.toFixed(1);
                 const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
                 showNotification(`文件太大，无法上传。文件大小：${fileSizeMB}MB，最大允许：${maxSizeMB}MB`, 'error');
                 return;
@@ -4333,7 +4690,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     errorMessage.innerHTML = `
                         <div class='message-content'>
                             <div class='message-text' style='color: #ff4d4f;'>文件上传失败：服务器返回格式错误</div>
-                            <div class='message-time'>${new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'})}</div>
+                            <div class='message-time'>${new Date().toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}</div>
                         </div>
                         <div class='message-avatar'>
                             <?php if (!empty($current_user['avatar'])): ?>
@@ -4359,7 +4716,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                 errorMessage.innerHTML = `
                     <div class='message-content'>
                         <div class='message-text' style='color: #ff4d4f;'>文件上传失败：网络错误</div>
-                        <div class='message-time'>${new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'})}</div>
+                        <div class='message-time'>${new Date().toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}</div>
                     </div>
                     <div class='message-avatar'>
                         <?php if (!empty($current_user['avatar'])): ?>
@@ -4447,7 +4804,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                 messageElement.innerHTML = `
                     <div class='message-content'>
                         <div class='message-text'>${messageWithLinks}</div>
-                        <div class='message-time'>${new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'})}</div>
+                        <div class='message-time'>${new Date().toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}</div>
                     </div>
                     <div class='message-avatar'>
                         <?php if (!empty($current_user['avatar'])): ?>
@@ -5386,7 +5743,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         console.log('申请列表:', data.requests);
                         data.requests.forEach(request => {
                             // 格式化时间
-                            const formattedTime = request.created_at ? new Date(request.created_at).toLocaleString('zh-CN') : '';
+                            const formattedTime = request.created_at ? new Date(request.created_at).toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'}) : '';
                             
                             if (request.type === 'friend') {
                                 // 好友请求
@@ -5578,7 +5935,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                             transition: all 0.2s ease;
                             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
                         " onmouseenter="this.style.borderColor='#12b7f5'; this.style.boxShadow='0 4px 12px rgba(18, 183, 245, 0.15)';" 
-                           onmouseleave="if(!this.querySelector('input').checked) { this.style.borderColor='#f0f0f0'; this.style.boxShadow='0 2px 4px rgba(0, 0, 0, 0.05); this.style.background='white'; }" 
+                           onmouseleave="if(!this.querySelector('input').checked) { this.style.borderColor='#f0f0f0'; this.style.boxShadow='0 2px 4px rgba(0, 0, 0, 0.05)'; this.style.background='white'; }" 
                            onclick="toggleFriendSelection(${friend.id})">
                             
                             <!-- 好友头像 -->
@@ -5648,12 +6005,13 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         }
                         
                         /* 选中好友项的样式 */
-                        .friend-select-item input:checked {
-                            background: #e3f2fd;
+                        .friend-select-item input:checked + span {
+                            background-color: #12b7f5;
+                            border-color: #12b7f5;
                         }
                         
                         .friend-select-item input:checked + span + span {
-                            background-color: white;
+                            opacity: 1;
                         }
                         
                         /* 按钮悬停效果 */
@@ -5873,31 +6231,69 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         }
         
         // 检查文件是否过期
-        function isFileExpired(fileName) {
-            // 使用文件名作为缓存标识
-            const name = `file_${encodeURIComponent(fileName)}=`;
-            const decodedCookie = document.cookie;
-            const ca = decodedCookie.split(';');
-            for(let i = 0; i < ca.length; i++) {
-                let c = ca[i].trim();
-                if (c.indexOf(name) == 0) {
+        function isFileExpired(fileName, fileType = 'file') {
+            // 根据文件类型获取缓存前缀
+            let prefix;
+            switch(fileType) {
+                case 'video':
+                    prefix = 'video_';
+                    break;
+                case 'audio':
+                    prefix = 'audio_';
+                    break;
+                case 'image':
+                    prefix = 'Picture_';
+                    break;
+                default:
+                    prefix = 'file_';
+            }
+            
+            const targetCookieName = `${prefix}${encodeURIComponent(fileName)}`;
+            
+            // 获取所有cookie
+            const cookies = document.cookie.split(';');
+            
+            // 遍历cookie，查找缓存相关的cookie
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                const [cookieName, cookieValue] = cookie.split('=');
+                
+                // 解码cookie名称，然后比较
+                const decodedCookieName = decodeURIComponent(cookieName);
+                if (decodedCookieName === targetCookieName) {
                     // Cookie存在，文件未过期
                     return false;
                 }
             }
+            
             // Cookie不存在，文件已过期
             return true;
         }
         
         // 设置文件Cookie
         function setFileCookie(fileName, fileType, fileSize = 0) {
-            // 使用文件名作为缓存标识
+            // 根据文件类型获取缓存前缀
+            let prefix;
+            switch(fileType) {
+                case 'video':
+                    prefix = 'video_';
+                    break;
+                case 'audio':
+                    prefix = 'audio_';
+                    break;
+                case 'image':
+                    prefix = 'Picture_';
+                    break;
+                default:
+                    prefix = 'file_';
+            }
+            
             const expirySeconds = getFileExpirySeconds(fileType);
             const expiryDate = new Date();
             expiryDate.setTime(expiryDate.getTime() + (expirySeconds * 1000));
             const expires = "expires=" + expiryDate.toUTCString();
             // 存储文件类型和大小，格式为"type:size"
-            document.cookie = `file_${encodeURIComponent(fileName)}=${encodeURIComponent(`${fileType}:${fileSize}`)}; ${expires}; path=/`;
+            document.cookie = `${prefix}${encodeURIComponent(fileName)}=${encodeURIComponent(`${fileType}:${fileSize}`)}; ${expires}; path=/`;
         }
         
         // 加载聊天记录
@@ -5917,11 +6313,11 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     
                     if (filePath && fileName) {
                         // 检查文件是否过期
-                        if (isFileExpired(filePath)) {
+                        if (isFileExpired(fileName, fileType)) {
                             // 尝试重新获取文件
                             fetchFileFromServer(filePath, fileName, media);
                         } else {
-                            setFileCookie(filePath, fileType, 0);
+                            setFileCookie(fileName, fileType, 0);
                             // 使用Blob URL隐藏真实URL，防止IDM等工具检测
                             if (media.tagName === 'VIDEO' || media.tagName === 'AUDIO') {
                                 fetch(filePath, {
@@ -5951,11 +6347,11 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         };
                         
                         // 检查文件是否过期
-                        if (isFileExpired(filePath)) {
+                        if (isFileExpired(fileName, fileType)) {
                             // 尝试重新获取文件
                             fetchMediaFromServer(media, filePath, fileName, fileType);
                         } else {
-                            setFileCookie(filePath, fileType, 0);
+                            setFileCookie(fileName, fileType, 0);
                             // 使用Blob URL隐藏真实URL，防止IDM等工具检测
                             if (media.tagName === 'AUDIO') {
                                 fetch(filePath, {
@@ -6007,7 +6403,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         // 文件存在，获取文件大小
                         const fileSize = parseInt(response.headers.get('content-length') || '0');
                         const fileType = getFileType(fileName);
-                        setFileCookie(filePath, fileType, fileSize);
+                        setFileCookie(fileName, fileType, fileSize);
                         // 重置重试计数器
                         delete fileRetryCounter[filePath];
                     } else {
@@ -6074,7 +6470,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     if (response.ok) {
                         // 文件存在，获取文件大小
                         const fileSize = parseInt(response.headers.get('content-length') || '0');
-                        setFileCookie(filePath, fileType, fileSize);
+                        setFileCookie(fileName, fileType, fileSize);
                         // 刷新媒体元素
                         if (media.tagName === 'IMG') {
                             media.src = filePath + '?' + new Date().getTime();
@@ -6963,30 +7359,18 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             // 显示视频播放器弹窗
             videoModal.classList.add('visible');
             
+            // 从URL中提取文件名，用于缓存检查
+            const fileNameFromUrl = videoUrl.split('/').pop().split('?')[0];
+            
             // 检查是否已经缓存，避免二次缓存
-            if (!isFileExpired(videoName)) {
-                console.log('视频已缓存，使用Blob URL播放');
-                // 使用fetch请求获取缓存的视频，然后创建Blob URL播放
-                fetch(videoUrl, {
-                credentials: 'include'
-            })
-                .then(response => response.blob())
-                .then(blob => {
-                    const blobUrl = URL.createObjectURL(blob);
-                    videoElement.src = blobUrl;
-                    // 不自动播放，等待用户手动点击
-                    videoElement.pause();
-                    // 不显示缓存状态
-                    cacheStatus.style.display = 'none';
-                })
-                .catch(error => {
-                    console.error('获取缓存视频失败:', error);
-                    // 发生错误时不降级使用服务器链接，保持视频不可播放
-                    videoElement.src = '';
-                    videoElement.load();
-                    cacheStatus.style.display = 'none';
-                    showNotification('获取缓存视频失败，无法播放', 'error');
-                });
+            if (!isFileExpired(fileNameFromUrl, 'video')) {
+                console.log('视频已缓存，直接使用URL播放');
+                // 视频已缓存，直接使用URL播放，不重新缓存
+                videoElement.src = videoUrl;
+                // 不自动播放，等待用户手动点击
+                videoElement.pause();
+                // 不显示缓存状态
+                cacheStatus.style.display = 'none';
             } else {
                 // 显示缓存状态
                 const cacheFileName = document.getElementById('cache-file-name');
@@ -7076,38 +7460,19 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                 return;
             }
             
+            // 从URL中提取文件名，用于缓存检查和设置cookie
+            const fileNameFromUrl = videoUrl.split('/').pop().split('?')[0];
+            
             // 检查当前视频是否已经被缓存，避免二次缓存
-            if (!isFileExpired(videoName)) {
+            if (!isFileExpired(fileNameFromUrl, 'video')) {
                 console.log('视频已缓存，直接使用缓存播放');
-                // 使用fetch请求获取缓存的视频，然后创建Blob URL播放
-                fetch(videoUrl, {
-                    credentials: 'include',
-                    cache: 'force-cache'
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                        return;
-                    }
-                    return response.blob();
-                })
-                .then(blob => {
-                    const blobUrl = URL.createObjectURL(blob);
-                    videoElement.src = blobUrl;
-                    // 不自动播放，等待用户手动点击
-                    videoElement.pause();
-                    cacheStatus.style.display = 'none';
-                    isCaching = false;
-                })
-                .catch(error => {
-                    console.error('获取缓存视频失败:', error);
-                    cacheStatus.style.display = 'none';
-                    showNotification('获取缓存视频失败，无法播放', 'error');
-                    isCaching = false;
-                    // 缓存失败时不回退到服务器URL，保持视频不可播放
-                    videoElement.src = '';
-                    videoElement.load();
-                });
+                // 直接使用视频URL，浏览器会自动使用缓存
+                videoElement.src = videoUrl;
+                // 不自动播放，等待用户手动点击
+                videoElement.pause();
+                // 不显示缓存状态
+                cacheStatus.style.display = 'none';
+                isCaching = false;
                 return;
             }
             
@@ -7193,7 +7558,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         }, 1000);
                         
                         // 完成缓存，设置cookie
-                        completeCache(videoName, 'video', totalBytes);
+                        completeCache(fileNameFromUrl, 'video', totalBytes);
                         
                         return blobUrl;
                     }
@@ -7901,7 +8266,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     contentHtml = `<div class='message-media'>
                         <img src='${file_path}' alt='${file_name}' class='message-image' data-file-name='${file_name}' data-file-type='image' data-file-path='${file_path}'>
                     </div>`;
-                    setFileCookie(file_path, 'image', file_size);
+                    // 只在cookie不存在时才缓存文件
+                    if (isFileExpired(file_name, 'image')) {
+                        setFileCookie(file_name, 'image', file_size);
+                    }
                 } else if (audioExts.includes(ext)) {
                     // 音频类型
                     contentHtml = `<div class='message-media' style='position: relative;'>
@@ -7924,7 +8292,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                             </div>
                         </div>
                     </div>`;
-                    setFileCookie(file_path, 'audio', file_size);
+                    // 只在cookie不存在时才缓存文件
+                    if (isFileExpired(file_name, 'audio')) {
+                        setFileCookie(file_name, 'audio', file_size);
+                    }
                 } else if (videoExts.includes(ext)) {
                     // 视频类型
                     contentHtml = `<div class='message-media' style='position: relative;'>
@@ -7952,7 +8323,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                             </style>
                         </div>
                     </div>`;
-                    setFileCookie(file_path, 'video', file_size);
+                    // 视频文件不自动缓存，需要用户手动点击后才缓存
+                    // if (isFileExpired(file_name)) {
+                    //     setFileCookie(file_name, 'video', file_size);
+                    // }
                 } else {
                 // 其他文件类型
                 contentHtml = `<div class='message-file' onclick="event.preventDefault(); addDownloadTask('${file_name}', '${file_path}', ${file_size}, 'file');">
@@ -7963,7 +8337,10 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                     </div>
                     <button style='background: #667eea; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.2s ease;' onclick="event.stopPropagation(); addDownloadTask('${file_name}', '${file_path}', ${file_size}, 'file');">下载</button>
                 </div>`;
-                setFileCookie(file_path, 'file', file_size);
+                // 只在cookie不存在时才缓存文件
+                if (isFileExpired(file_name, 'file')) {
+                    setFileCookie(file_name, 'file', file_size);
+                }
             }
             } else {
                 // 检测消息是否包含链接
@@ -8155,6 +8532,20 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
         // 撤回消息
         function recallMessage(messageId, chatType, chatId) {
             if (confirm('确定要撤回这条消息吗？')) {
+                // 找到对应的消息元素并获取原始内容
+                const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+                let originalContent = '';
+                let isTextMessage = false;
+                
+                if (messageElement) {
+                    // 检查是否为文本消息
+                    const textElement = messageElement.querySelector('.message-text:not([style*="italic"])');
+                    if (textElement && !messageElement.querySelector('.message-media, .message-file, .custom-audio-player, .video-container')) {
+                        originalContent = textElement.textContent || textElement.innerText;
+                        isTextMessage = true;
+                    }
+                }
+                
                 fetch('recall_message.php', {
                     method: 'POST',
                     headers: {
@@ -8168,13 +8559,17 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                         // 找到对应的消息元素并移除
                         const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
                         if (messageElement) {
-                            // 替换为撤回提示
+                            // 替换为撤回提示，包含重新编辑按钮
+                            const editButton = isTextMessage ? `
+                                <button onclick="event.stopPropagation(); editRecalledMessage('${messageId}', '${chatType}', '${chatId}', '${encodeURIComponent(originalContent)}')" style='margin-left: 10px; padding: 2px 8px; font-size: 12px; background: #12b7f5; color: white; border: none; border-radius: 10px; cursor: pointer;'>重新编辑</button>
+                            ` : '';
+                            
                             messageElement.innerHTML = `
                                 <div class='message-content'>
-                                    <div class='message-text' style='color: #999; font-style: italic;'>
-                                        你撤回了一条消息
+                                    <div class='message-text' style='color: #999; font-style: italic; display: flex; align-items: center;'>
+                                        你撤回了一条消息${editButton}
                                     </div>
-                                    <div class='message-time'>${new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'})}</div>
+                                    <div class='message-time'>${new Date().toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}</div>
                                 </div>
                                 <div class='message-avatar'>
                                     <?php if (!empty($current_user['avatar'])): ?>
@@ -8197,6 +8592,20 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
             }
         }
 
+        // 重新编辑撤回的消息
+        function editRecalledMessage(messageId, chatType, chatId, originalContent) {
+            // 将撤回的消息内容填充到输入框
+            const messageInput = document.getElementById('message-input');
+            messageInput.value = decodeURIComponent(originalContent);
+            messageInput.focus();
+            
+            // 滚动到底部
+            messageInput.scrollTop = messageInput.scrollHeight;
+            
+            // 可以选择自动发送编辑后的消息，或者让用户手动发送
+            // 如果需要自动发送，可以调用 sendMessage() 函数
+        }
+        
         // 标记消息为已读
         function markMessagesAsRead() {
             const chatType = '<?php echo $chat_type; ?>';
@@ -9615,7 +10024,7 @@ $user_ip = $_SERVER['REMOTE_ADDR'];
                                     </div>
                                     <div>
                                         <div style="font-weight: 500; color: #333;">${req.username}</div>
-                                        <div style="font-size: 12px; color: #666; margin-top: 2px;">${new Date(req.created_at).toLocaleString()}</div>
+                                        <div style="font-size: 12px; color: #666; margin-top: 2px;">${new Date(req.created_at).toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}</div>
                                     </div>
                                 </div>
                                 <div style="display: flex; gap: 8px;">

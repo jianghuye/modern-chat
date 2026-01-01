@@ -518,7 +518,83 @@ require_once 'Group.php';
         }
     }
 
+    // 处理@提及功能
+    function processMentions($message_id, $message_text, $chat_type, $chat_id, $user_id, $conn) {
+        // 只有群聊消息需要处理@提及
+        if ($chat_type !== 'group') {
+            return;
+        }
+        
+        // 解析消息中的@提及
+        $mentioned_users = [];
+        
+        // 匹配@用户名格式，包括@全体成员和@具体用户名
+        preg_match_all('/@([\u4e00-\u9fa5\w]+)/u', $message_text, $matches);
+        
+        if (!empty($matches[1])) {
+            $mentioned_names = $matches[1];
+            
+            // 检查是否提及了全体成员
+            if (in_array('全体成员', $mentioned_names) || in_array('所有人', $mentioned_names)) {
+                // 获取群聊所有成员
+                $group = new Group($conn);
+                $group_members = $group->getGroupMembers($chat_id);
+                
+                foreach ($group_members as $member) {
+                    // 不包括发送者自己
+                    if ($member['user_id'] != $user_id) {
+                        $mentioned_users[] = $member['user_id'];
+                    }
+                }
+            } else {
+                // 获取具体提及的用户
+                foreach ($mentioned_names as $name) {
+                    $stmt = $conn->prepare("SELECT id FROM users WHERE username = ?");
+                    $stmt->execute([$name]);
+                    $user = $stmt->fetch();
+                    if ($user && $user['id'] != $user_id) {
+                        $mentioned_users[] = $user['id'];
+                    }
+                }
+            }
+        }
+        
+        // 去重
+        $mentioned_users = array_unique($mentioned_users);
+        
+        // 为被提及的用户添加@提醒标记
+        foreach ($mentioned_users as $mentioned_user_id) {
+            // 检查chat_settings表是否存在
+            $stmt = $conn->prepare("SHOW TABLES LIKE 'chat_settings'");
+            $stmt->execute();
+            if (!$stmt->fetch()) {
+                // 创建chat_settings表
+                $conn->exec("CREATE TABLE IF NOT EXISTS chat_settings (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    chat_type ENUM('friend', 'group') NOT NULL,
+                    chat_id INT NOT NULL,
+                    is_muted BOOLEAN DEFAULT FALSE,
+                    has_mention BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY unique_user_chat (user_id, chat_type, chat_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )");
+            }
+            
+            // 更新或插入chat_settings记录，标记有@提及
+            $stmt = $conn->prepare("INSERT INTO chat_settings (user_id, chat_type, chat_id, has_mention) 
+                                   VALUES (?, ?, ?, TRUE) 
+                                   ON DUPLICATE KEY UPDATE has_mention = TRUE, updated_at = CURRENT_TIMESTAMP");
+            $stmt->execute([$mentioned_user_id, 'group', $chat_id]);
+        }
+    }
+    
     if ($result['success']) {
+        // 处理@提及
+        processMentions($result['message_id'], $message_text, $chat_type, $chat_type === 'friend' ? $friend_id : $selected_id, $user_id, $conn);
+        
         // 获取完整的消息信息
         if ($chat_type === 'friend') {
             // 获取好友消息

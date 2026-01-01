@@ -15,7 +15,6 @@ if (session_status() === PHP_SESSION_NONE) {
 try {
     require_once 'config.php';
     require_once 'db.php';
-    require_once 'Group.php';
     
     // 检查用户是否登录
     if (!isset($_SESSION['user_id'])) {
@@ -30,11 +29,12 @@ try {
     }
     
     $user_id = $_SESSION['user_id'];
-    $group_id = isset($_GET['group_id']) ? intval($_GET['group_id']) : 0;
+    $chat_type = isset($_GET['chat_type']) ? $_GET['chat_type'] : '';
+    $chat_id = isset($_GET['chat_id']) ? intval($_GET['chat_id']) : 0;
     
     // 验证数据
-    if ($group_id <= 0) {
-        echo json_encode(['success' => false, 'message' => '无效的群聊ID']);
+    if (empty($chat_type) || $chat_id <= 0) {
+        echo json_encode(['success' => false, 'message' => '无效的请求参数']);
         exit;
     }
     
@@ -44,27 +44,11 @@ try {
         exit;
     }
     
-    // 创建Group实例
-    $group = new Group($conn);
+    // 重置@提及标记
+    $stmt = $conn->prepare("UPDATE chat_settings SET has_mention = FALSE WHERE user_id = ? AND chat_type = ? AND chat_id = ?");
+    $stmt->execute([$user_id, $chat_type, $chat_id]);
     
-    // 获取群聊成员列表
-    $members = $group->getGroupMembers($group_id);
-    
-    // 处理成员数据，只返回需要的字段
-    $result = [];
-    foreach ($members as $member) {
-        $result[] = [
-            'id' => $member['user_id'],
-            'username' => $member['username'],
-            'nickname' => $member['nickname'] ?? '',
-            'avatar' => $member['avatar'] ?? ''
-        ];
-    }
-    
-    echo json_encode([
-        'success' => true,
-        'members' => $result
-    ]);
+    echo json_encode(['success' => true, 'message' => '重置@提及标记成功']);
 } catch (Exception $e) {
     // 捕获所有异常并返回错误信息
     $error_msg = "服务器内部错误: " . $e->getMessage();
